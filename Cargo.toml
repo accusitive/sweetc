@@ -9,3 +9,4 @@ infer = {path = "./infer"}
 hir = {path = "./hir"}
 bumpalo = "3.17.0"
 ariadne = "0.5.1"
+yansi = "1.0.1"

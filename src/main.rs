@@ -1,6 +1,9 @@
-use ariadne::{Label, Source};
+use std::fmt::Write;
+
+use ariadne::{Color, Label, Source};
 use hir::HirLower;
 use parser::{lex, parse_string};
+use yansi::Paint;
 
 pub fn main() {
     let src = include_str!("../input/test.sw");
@@ -13,24 +16,64 @@ pub fn main() {
 
     let mut lctx = HirLower::new(&arena);
     lctx.lower(&ast);
+    debug_print_ast(true, src, &lctx);
     let subs = lctx.create_substitutions();
     lctx.apply_substitutions(&subs);
+    debug_print_ast(false, src, &lctx);
+}
 
-    for (id, node) in &lctx.hir_map {
+fn debug_print_ast(before_inference: bool, src: &str, lctx: &HirLower) {
+    let sorted = lctx.hir_map.clone();
+    let mut x = sorted.iter().collect::<Vec<_>>();
+    x.sort_by(|l, r| l.0.cmp(r.0));
+
+    let mut labels = vec![];
+    for (id, node) in x.iter() {
+        let col = match labels.len() % 6 {
+            0 => Color::Red,
+            1 => Color::Green,
+            2 => Color::Blue,
+            3 => Color::Cyan,
+            4 => Color::Magenta,
+            5 => Color::Yellow,
+            _ => Color::White,
+        };
         match &node {
             hir::HirNode::Expression(expression) => {
-                ariadne::Report::build(
-                    ariadne::ReportKind::Advice,
-                    ("test", expression.span.into_range()),
-                )
-                .with_label(
-                    Label::new(("test", expression.span.into_range())).with_message(format!("ty: {:?}", lctx.expr_types[id])),
-                )
-                .finish()
-                .eprint(("test", Source::from(src.to_string())))
-                .unwrap();
+                let expr_ty = lctx.expr_types[id].clone();
+                let constraints = lctx
+                    .constraints
+                    .iter()
+                    .filter(|constraint| constraint.0 == expr_ty || constraint.1 == expr_ty)
+                    .map(|cons| {
+                        let relevant = match (cons.0 == expr_ty, cons.1 == expr_ty) {
+                            (true, true) => todo!(),
+                            (true, false) => format!("{}, ", cons.1),
+                            (false, true) => format!("{}, ", cons.0),
+                            (false, false) => todo!()
+                        };
+                        relevant
+                        // format!("{} == {}, ", cons.0, cons.1)
+                    })
+                    .collect::<String>();
+                labels.push(
+                    Label::new(("test.sw", expression.span.into_range()))
+                        .with_message(format!("ty: {} constraints: [{}]", lctx.expr_types[id], constraints).paint(col))
+                        .with_color(col),
+                );
             }
             _ => {}
         }
     }
+    ariadne::Report::build(
+        ariadne::ReportKind::Custom(
+            &format!("inferred: {}", !before_inference),
+            ariadne::Color::Blue,
+        ),
+        ("test.sw", 0..0),
+    )
+    .with_labels(labels)
+    .finish()
+    .eprint(("test.sw", Source::from(src.to_string())))
+    .unwrap();
 }

@@ -1,8 +1,11 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt::Display, ops::Deref, panic::UnwindSafe};
 
 use bumpalo::Bump;
 pub use parser::parser as ast;
-use parser::{Span, Spanned, parser::SpannedIdentifier};
+use parser::{
+    Span, Spanned,
+    parser::{BinaryOperation, SpannedIdentifier, TypeDefinitionKind},
+};
 pub struct HirLower<'src, 'hir> {
     next_id: usize,
     pub hir_map: HashMap<HirId, HirNode<'hir>>,
@@ -14,7 +17,7 @@ pub struct HirLower<'src, 'hir> {
     pub scopes: Vec<Scope<'src>>,
     pub arena: &'hir Bump,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum HirNode<'hir> {
     FunctionDefinition,
     Expression(&'hir Expression<'hir>),
@@ -25,15 +28,16 @@ pub enum Definition<'src> {
     TypeParameter(SpannedIdentifier<'src>),
     Parameter(Parameter),
     Local(HirId),
+    Z,
 }
 
 #[derive(Debug, Default)]
 pub struct Scope<'src> {
     pub names: HashMap<&'src str, DefId>,
 }
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct HirId(usize);
-#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub struct DefId(usize);
 
 impl<'src, 'hir> HirLower<'src, 'hir> {
@@ -86,13 +90,24 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
                 name,
                 type_parameters,
                 body,
-            } => {}
+            } => self.lower_type_definition(name, type_parameters, body),
         }
+    }
+    pub fn lower_type_definition(
+        &mut self,
+        name: &ast::SpannedIdentifier<'src>,
+        type_parameters: &Vec<Spanned<ast::TypeParameter<'src>>>,
+        body: &Spanned<ast::TypeDefinitionKind<'src>>,
+    ) {
+        let id = self.next_def_id();
+        self.def_map.insert(id, Definition::Z);
+
+        self.scope().names.insert(name.0, id);
     }
     pub fn lower_function_definition(
         &mut self,
         name: &ast::SpannedIdentifier<'src>,
-        type_parameters: &Spanned<Vec<Spanned<ast::TypeParameter<'src>>>>,
+        type_parameters: &Vec<Spanned<ast::TypeParameter<'src>>>,
         parameters: &Spanned<Vec<Spanned<ast::Parameter<'src>>>>,
         return_ty: &Spanned<ast::Ty<'src>>,
         body: &Spanned<ast::Expression<'src>>,
@@ -100,7 +115,7 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
         let def_id = self.next_def_id();
         let mut hir_parameters = vec![];
         self.push_scope();
-        for type_parameter in &type_parameters.0 {
+        for type_parameter in type_parameters {
             let id = self.next_def_id();
             self.def_map
                 .insert(id, Definition::TypeParameter(type_parameter.0.name));
@@ -125,6 +140,9 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
             hir_parameters.push(def_id);
         }
         let body = self.lower_expression(body);
+        let body_ty = self.expr_types[&body.id].clone();
+        let ret_ty = self.lower_ty(return_ty);
+
         self.def_map.insert(
             def_id,
             Definition::Function(FunctionDefinition {
@@ -134,43 +152,62 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
             }),
         );
         self.pop_scope();
+        self.constraints.push((ret_ty.kind, body_ty));
     }
     pub fn lower_ty(&mut self, ty: &Spanned<ast::Ty<'src>>) -> Ty {
-        let kind = match ty.0 {
+        let kind = match &ty.0 {
             ast::Ty::Infer => TyKind::Unspecified(self.next_ty_id()),
             ast::Ty::I32 => TyKind::I32,
             ast::Ty::I64 => TyKind::I64,
-            ast::Ty::Fn(_, _) => todo!(),
+            ast::Ty::Fn(params, ret) => {
+                let params = params.0.iter().map(|p| self.lower_ty(p)).collect();
+
+                TyKind::Function(params, Box::new(self.lower_ty(ret.deref())))
+            }
             ast::Ty::Name(name) => TyKind::Local(self.resolve_name(&name).unwrap()),
+            ast::Ty::Apply(base, type_args) => TyKind::Apply(
+                Box::new(self.lower_ty(base.deref())),
+                type_args
+                    .iter()
+                    .map(|t| self.lower_ty(t))
+                    .collect::<Vec<_>>(),
+            ),
+            ast::Ty::Bool => TyKind::Bool,
         };
 
         Ty { kind, span: ty.1 }
+    }
+    fn get_def_ty(&self, d: &DefId) -> TyKind {
+        match &self.def_map[d] {
+            Definition::Function(function_definition) => todo!(),
+            Definition::TypeParameter(_) => {
+                todo!()
+            }
+            Definition::Parameter(parameter) => {
+                parameter.ty.kind.clone()
+                // self.constraints
+                // .push((ty.clone(), parameter.ty.kind.clone()));
+            }
+            Definition::Local(hir_id) => {
+                self.expr_types[hir_id].clone()
+                // self.constraints
+                //     .push((ty.clone(), self.expr_types[hir_id].clone()));
+            }
+            Definition::Z => todo!(),
+        }
     }
     pub fn lower_expression(
         &mut self,
         expr: &Spanned<ast::Expression<'src>>,
     ) -> &'hir Expression<'hir> {
-        let ty = TyKind::Unspecified(self.next_ty_id());
+        let this_expression_ty = TyKind::Unspecified(self.next_ty_id());
         let kind = match &expr.0 {
             ast::Expression::Path(i) => {
                 let d = self
                     .resolve_name(i)
                     .expect(&format!("couldn't find name {}", i.0));
                 dbg!(&self.def_map, d);
-                match &self.def_map[&d] {
-                    Definition::Function(function_definition) => todo!(),
-                    Definition::TypeParameter(_) => {
-                        todo!()
-                    }
-                    Definition::Parameter(parameter) => {
-                        self.constraints
-                            .push((ty.clone(), parameter.ty.kind.clone()));
-                    }
-                    Definition::Local(hir_id) => {
-                        self.constraints
-                            .push((ty.clone(), self.expr_types[hir_id].clone()));
-                    }
-                }
+                self.constraints.push((this_expression_ty.clone(), self.get_def_ty(&d)));
                 ExprKind::Local(d)
             }
             ast::Expression::Block(items) => {
@@ -185,28 +222,24 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
                 self.pop_scope();
                 if let Some(last_expr) = block.last() {
                     self.constraints
-                        .push((ty.clone(), self.expr_types[&last_expr.id].clone()));
-                    // ty = self.expr_types[&last_expr.id].clone();
-                    // let t = match &self.hir_map[last_expr] {
-                    //     HirNode::Expression(expression) => expression.ty.clone(),
-                    //     _ => unreachable!(),
-                    // };
-
-                    // ty = t;
+                        .push((this_expression_ty.clone(), self.expr_types[&last_expr.id].clone()));
                 }
                 let x: &_ = self.arena.alloc_slice_fill_iter(block);
                 ExprKind::Block(x)
             }
             ast::Expression::Let(binding, t, init) => {
                 let def_id = self.next_def_id();
-                if let Some(t) = t {
-                    let explicit_ty = self.lower_ty(t).kind;
-                    self.constraints.push((ty.clone(), explicit_ty));
-                }
 
                 let init = self.lower_expression(init);
+                let init_ty = self.expr_types[&init.id].clone();
+                if let Some(t) = t {
+                    let explicit_ty = self.lower_ty(t).kind;
+                    // ensure init ty == explicit_ty
+                    self.constraints.push((init_ty, explicit_ty));
+                }
+                // set our expr's tyvar = explicit_ty = init_ty
                 self.constraints
-                    .push((ty.clone(), self.expr_types[&init.id].clone()));
+                    .push((this_expression_ty.clone(), self.expr_types[&init.id].clone()));
 
                 self.scope().names.insert(binding.0, def_id);
                 self.def_map.insert(def_id, Definition::Local(init.id));
@@ -222,10 +255,15 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
                 let then = self.lower_expression(&*then);
                 let elze = self.lower_expression(&*elze);
 
-                let lty = &self.expr_types[&then.id];
-                let rty = &self.expr_types[&elze.id];
+                let cond_ty = &self.expr_types[&condition.id];
 
-                self.constraints.push((lty.clone(), rty.clone()));
+                let then_ty = &self.expr_types[&then.id];
+                let elze_ty = &self.expr_types[&elze.id];
+
+                self.constraints.push((cond_ty.clone(), TyKind::Bool));
+
+                self.constraints.push((this_expression_ty.clone(), then_ty.clone()));
+                self.constraints.push((this_expression_ty.clone(), elze_ty.clone()));
 
                 ExprKind::If(
                     self.arena.alloc(condition),
@@ -233,7 +271,7 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
                     self.arena.alloc(elze),
                 )
             }
-            ast::Expression::Add(l, r) => {
+            ast::Expression::BinaryOperation(l, op, r) => {
                 let l = self.lower_expression(&*l);
                 let r = self.lower_expression(&*r);
 
@@ -241,11 +279,97 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
                 let rty = &self.expr_types[&r.id];
 
                 self.constraints.push((lty.clone(), rty.clone()));
-                self.constraints.push((ty.clone(), lty.clone()));
-                self.constraints.push((ty.clone(), rty.clone()));
+                self.constraints.push((this_expression_ty.clone(), lty.clone()));
+                self.constraints.push((this_expression_ty.clone(), rty.clone()));
 
-                ExprKind::Add(self.arena.alloc(l), self.arena.alloc(r))
+                ExprKind::BinaryOperation(self.arena.alloc(l), op.clone(), self.arena.alloc(r))
             }
+            ast::Expression::Some(inner) => {
+                let x = self.resolve_name(&("Option", Span::from(0..0))).unwrap();
+
+                let inner = self.lower_expression(&*inner);
+                let inner_ty = self.expr_types[&inner.id].clone();
+
+                let option = Ty {
+                    kind: TyKind::Local(x),
+                    span: Span::from(0..0),
+                };
+                let arg = Ty {
+                    kind: inner_ty,
+                    span: Span::from(0..0),
+                };
+
+                self.constraints
+                    .push((this_expression_ty.clone(), TyKind::Apply(Box::new(option), vec![arg])));
+
+                ExprKind::Some(inner)
+            }
+            ast::Expression::Literal(literal) => match literal {
+                ast::Literal::Boolean(boolean_literal) => {
+                    self.constraints.push((this_expression_ty.clone(), TyKind::Bool));
+                    ExprKind::Literal(literal.clone())
+                }
+            },
+            ast::Expression::Closure(parameters, returns, body) => {
+                let mut parameter_tys = vec![];
+                let mut parameter_definition = vec![];
+                self.push_scope();
+                for parameter in &parameters.0 {
+                    let def_id = self.next_def_id();
+
+                    self.scope().names.insert(parameter.0.name.0, def_id);
+
+                    let ty = self.lower_ty(&parameter.0.ty);
+                    parameter_tys.push(ty.clone());
+
+                    self.def_map.insert(
+                        def_id,
+                        Definition::Parameter(Parameter {
+                            def_id,
+                            ty,
+                            span: parameter.1,
+                        }),
+                    );
+                    parameter_definition.push(def_id);
+                }
+                let body = self.lower_expression(body);
+                let body_ty = self.expr_types[&body.id].clone();
+                self.pop_scope();
+                let ret = self.lower_ty(returns);
+                self.constraints.push((body_ty.clone(), ret.kind.clone()));
+                let func_ty = TyKind::Function(parameter_tys, Box::new(ret));
+                self.constraints.push((this_expression_ty.clone(), func_ty.clone()));
+
+                ExprKind::Closure(func_ty.clone(), body)
+            }
+            ast::Expression::Call(target, items) => {
+                let target = self.lower_expression(target.deref());
+                let target_ty = self.expr_types[&target.id].clone();
+
+                let args = items
+                    .iter()
+                    .map(|a| self.lower_expression(a))
+                    .collect::<Vec<_>>();
+                let arg_tys = args
+                    .iter()
+                    .map(|e| Ty {
+                        span: Span::from(0..0),
+                        kind: self.expr_types[&e.id].clone(),
+                    })
+                    .collect::<Vec<_>>();
+
+                let func_ty = TyKind::Function(
+                    arg_tys,
+                    Box::new(Ty {
+                        span: Span::from(0..0),
+                        kind: this_expression_ty.clone(),
+                    }),
+                );
+                
+                self.constraints.push((target_ty.clone(), func_ty));
+                ExprKind::Call(target, self.arena.alloc_slice_fill_iter(args))
+            }
+            ast::Expression::X => todo!(),
         };
         let id = self.next_hir_id();
         let e = self.arena.alloc(Expression {
@@ -255,7 +379,7 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
         });
 
         self.hir_map.insert(id, HirNode::Expression(e));
-        self.expr_types.insert(id, ty);
+        self.expr_types.insert(id, this_expression_ty);
 
         e
     }
@@ -277,7 +401,7 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
         self.scopes.last_mut().unwrap()
     }
     pub fn apply_substitutions(&mut self, sub: &Subs) {
-        dbg!(&sub);
+        // dbg!(&sub);
         let mut replace = vec![];
         for (id, ty) in &self.expr_types {
             match ty {
@@ -288,7 +412,6 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
             }
         }
         for (replace, tid) in replace {
-            dbg!(&replace, tid);
             if let Some(replacment) = sub.get(&tid) {
                 self.expr_types.insert(replace, replacment.clone());
             }
@@ -311,6 +434,22 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
                     ty.clone()
                 }
             }
+            TyKind::Apply(base, args) => {
+                let new_base = Ty {
+                    kind: Self::apply(&base.kind, sub),
+                    span: base.span,
+                };
+
+                let args = args
+                    .iter()
+                    .map(|arg| Ty {
+                        kind: Self::apply(&arg.kind, sub),
+                        span: arg.span,
+                    })
+                    .collect();
+
+                TyKind::Apply(Box::new(new_base), args)
+            }
             x => x.clone(),
         }
     }
@@ -327,12 +466,37 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
                 sub.insert(v, other);
                 Ok(sub)
             }
+            (TyKind::Apply(left_base, left_args), TyKind::Apply(right_base, right_args)) => {
+                if left_args.len() != right_args.len() {
+                    return Err(format!(
+                        "Cannot unify type applications with different argument counts: {:?} vs {:?}",
+                        left_args, right_args
+                    ));
+                }
+
+                // Ensure base is compatible
+                sub = Self::unify(&left_base.kind, &right_base.kind, sub)?;
+                // Ensure inner values are compatible
+                for (left_arg, right_arg) in left_args.iter().zip(right_args.iter()) {
+                    sub = Self::unify(&left_arg.kind, &right_arg.kind, sub)?;
+                }
+
+                Ok(sub)
+            }
+            (TyKind::Function(p1, r1), TyKind::Function(p2, r2)) => {
+                for (left_param, right_param) in p1.iter().zip(p2.iter()) {
+                    sub = Self::unify(&left_param.kind, &right_param.kind, sub)?;
+                }
+                sub = Self::unify(&r1.kind, &r2.kind, sub)?;
+
+                Ok(sub)
+            }
             (t1, t2) => Err(format!("Cannot unify '{:?}' and '{:?}'", t1, t2)),
         }
     }
 }
 type Subs = HashMap<usize, TyKind>;
-#[derive(Debug)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Ty {
     kind: TyKind,
     span: Span,
@@ -341,8 +505,16 @@ pub struct Ty {
 pub enum TyKind {
     I32,
     I64,
+    Bool,
+
+    // Internal type for inference
     Unspecified(usize),
+    // Reference to a definition, ie: Type Parameter, Struct, Enum, type Alias
     Local(DefId),
+    // Base<A,R,G,S>
+    Apply(Box<Ty>, Vec<Ty>),
+
+    Function(Vec<Ty>, Box<Ty>),
 }
 #[derive(Debug)]
 pub struct FunctionDefinition<'src> {
@@ -371,6 +543,55 @@ pub enum ExprKind<'hir> {
         &'hir Expression<'hir>,
         &'hir Expression<'hir>,
     ),
-    Add(&'hir Expression<'hir>, &'hir Expression<'hir>),
+    BinaryOperation(
+        &'hir Expression<'hir>,
+        ast::BinaryOperation,
+        &'hir Expression<'hir>,
+    ),
     Local(DefId),
+    Some(&'hir Expression<'hir>),
+    Literal(ast::Literal),
+    Closure(TyKind, &'hir Expression<'hir>),
+    Call(&'hir Expression<'hir>, &'hir [&'hir Expression<'hir>]),
+}
+
+impl Display for Ty {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.kind)
+    }
+}
+impl Display for TyKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TyKind::I32 => write!(f, "i32"),
+            TyKind::I64 => write!(f, "i64"),
+            TyKind::Unspecified(num) => write!(f, "_{num}"),
+            TyKind::Local(def_id) => write!(f, "_local{}", def_id.0),
+            TyKind::Apply(ty, items) => {
+                write!(f, "{}", ty)?;
+                write!(f, "<")?;
+                for (item, i) in items.iter().zip(0..) {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", item)?;
+                }
+                write!(f, ">")
+            }
+            TyKind::Bool => write!(f, "bool"),
+            TyKind::Function(items, ty) => {
+                write!(f, "fn")?;
+                write!(f, "(")?;
+                for (item, i) in items.iter().zip(0..) {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", item)?;
+                }
+                write!(f, ")")?;
+
+                write!(f, " -> {}", ty)
+            }
+        }
+    }
 }

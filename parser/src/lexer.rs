@@ -4,7 +4,6 @@ use chumsky::{input::BorrowInput, prelude::*, text::ascii::ident};
 
 use crate::{Span, Spanned};
 
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Keyword {
     Class,
@@ -18,6 +17,8 @@ pub enum Keyword {
 
     I32,
     I64,
+    True,
+    False,
     F32,
     F64,
     Char,
@@ -26,6 +27,7 @@ pub enum Keyword {
     Match,
     Else,
     Let,
+    Some
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Punctuation {
@@ -46,6 +48,7 @@ pub enum Punctuation {
     Equal,
     Semicolon,
     Plus,
+    Star
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LiteralTok<'a> {
@@ -76,6 +79,9 @@ pub fn lexer<'src>()
         "f32" => Token::Keyword(Keyword::F32),
         "f64" => Token::Keyword(Keyword::F64),
 
+        "true" => Token::Keyword(Keyword::True),
+        "false" => Token::Keyword(Keyword::False),
+
         "char" => Token::Keyword(Keyword::Char),
         "bool" => Token::Keyword(Keyword::Bool),
 
@@ -86,6 +92,7 @@ pub fn lexer<'src>()
         "view" => Token::Keyword(Keyword::View),
         "as" => Token::Keyword(Keyword::As),
 
+        "some" => Token::Keyword(Keyword::Some),
         _ => Token::Identifier(ident),
     });
     let punc = choice((
@@ -106,6 +113,7 @@ pub fn lexer<'src>()
         just('=').map(|_| Punctuation::Equal),
         just(';').map(|_| Punctuation::Semicolon),
         just('+').map(|_| Punctuation::Plus),
+        just('*').map(|_| Punctuation::Star),
     ))
     .map(|p| Token::Punctuation(p));
     let int_literal = text::int::<_, _>(10)
@@ -143,7 +151,6 @@ pub fn make_input<'src>(
 ) -> impl BorrowInput<'src, Token = Token<'src>, Span = SimpleSpan> {
     toks.map(eoi, |(t, s)| (t, s))
 }
-
 
 impl<'a> Display for Token<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

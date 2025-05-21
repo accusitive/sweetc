@@ -85,7 +85,7 @@ impl Inference {
             }
             ExprKind::Literal(int) => Ok(TypedExpression {
                 kind: ExprKind::Literal(*int),
-                ty: Ty::ConcreteTy(crate::ConcreteTy::Integer)
+                ty: Ty::ConcreteTy(crate::ConcreteTy::Integer),
             }),
             ExprKind::Identifier(i) => {
                 let ty = self
@@ -237,12 +237,8 @@ fn unify(ty1: &Ty, ty2: &Ty, mut sub: Substitutions) -> Result<Substitutions, St
             let sub = unify(&*c1, &*c2, sub)?;
             unify(&*a1, &*a2, sub)
         }
-        (Ty::ConcreteTy(ConcreteTy::I64), Ty::ConcreteTy(ConcreteTy::Integer)) =>{
-            Ok(sub)
-        }
-        (Ty::ConcreteTy(ConcreteTy::I32), Ty::ConcreteTy(ConcreteTy::Integer)) =>{
-            Ok(sub)
-        }
+        (Ty::ConcreteTy(ConcreteTy::I64), Ty::ConcreteTy(ConcreteTy::Integer)) => Ok(sub),
+        (Ty::ConcreteTy(ConcreteTy::I32), Ty::ConcreteTy(ConcreteTy::Integer)) => Ok(sub),
         (t1, t2) => Err(format!("Cannot unify '{}' and '{}'", t1, t2)),
     }
 }

@@ -8,7 +8,10 @@ use ariadne::{Color, Label, Report, ReportKind, Source};
 use chumsky::prelude::*;
 
 use lexer::Token;
-use parser::{Expression, Item, Parameter, TranslationUnit, Ty, TypeDefinitionKind};
+use parser::{
+    BinaryOperation, Expression, Item, Parameter, TranslationUnit, Ty, TypeDefinitionKind,
+    TypeParameter,
+};
 
 pub type Span = SimpleSpan;
 pub type Spanned<T> = (T, Span);
@@ -84,9 +87,9 @@ impl<'a> Display for Item<'a> {
                 body,
             } => {
                 write!(f, "fn {}", name.0)?;
-                if type_parameters.0.len() > 0 {
+                if type_parameters.len() > 0 {
                     write!(f, "<")?;
-                    for tp in &type_parameters.0 {
+                    for tp in type_parameters {
                         write!(f, "{}, ", tp.0.name.0)?;
                     }
                     write!(f, ">")?;
@@ -106,9 +109,9 @@ impl<'a> Display for Item<'a> {
                 body,
             } => {
                 write!(f, "type {}", name.0)?;
-                if type_parameters.0.len() > 0 {
+                if type_parameters.len() > 0 {
                     write!(f, "<")?;
-                    for tp in &type_parameters.0 {
+                    for tp in type_parameters {
                         write!(f, "{}, ", tp.0.name.0)?;
                     }
                     write!(f, ">")?;
@@ -150,8 +153,24 @@ impl<'a> Display for Ty<'a> {
             Ty::Name(n) => {
                 write!(f, "{}", n.0)?;
             }
+            Ty::Apply(base, params) => {
+                write!(f, "{}", base.deref().0)?;
+                write!(f, "<")?;
+                for param in params {
+                    write!(f, "{}, ", param.0)?;
+                }
+                write!(f, ">")?;
+            }
+            Ty::Bool => {
+                write!(f, "bool")?;
+            }
         }
         return Ok(());
+    }
+}
+impl<'a> Display for TypeParameter<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name.0)
     }
 }
 impl<'a> Display for Expression<'a> {
@@ -184,9 +203,41 @@ impl<'a> Display for Expression<'a> {
                 write!(s, "{}\n", then.deref().0)?;
                 write!(s, "else {}", elze.deref().0)?;
             }
-            Expression::Add(l, r) => {
-                write!(s, "{} + {}", l.deref().0, r.deref().0)?;
+            Expression::BinaryOperation(l, op, r) => {
+                write!(s, "{} {} {}", l.deref().0, op, r.deref().0)?;
             }
+            Expression::Some(inner) => {
+                write!(f, "some {}", inner.deref().0)?;
+            }
+            Expression::Literal(literal) => match literal {
+                parser::Literal::Boolean(boolean_literal) => match boolean_literal {
+                    parser::BooleanLiteral::True => {
+                        write!(f, "true")?;
+                    }
+                    parser::BooleanLiteral::False => {
+                        write!(f, "false")?;
+                    }
+                },
+            },
+            Expression::Closure(params, returns, body) => {
+                write!(f, "fn")?;
+                write!(f, "(")?;
+                for param in &params.0 {
+                    write!(f, "{}, ", param.0)?;
+                }
+                write!(f, ")")?;
+                write!(f, " -> ")?;
+                write!(f, " {}", returns.0)?;
+            }
+            Expression::Call(target, items) => {
+                write!(f, "{}", target.deref().0)?;
+                write!(f, "(")?;
+                for item in items {
+                    write!(f, "{}, ", item.0)?;
+                }
+                write!(f, ")")?;
+            },
+            Expression::X => todo!(),
         }
         f.write_str(
             &s.lines()
@@ -210,5 +261,14 @@ impl<'a> Display for TypeDefinitionKind<'a> {
             }
         }
         Ok(())
+    }
+}
+
+impl<'a> Display for BinaryOperation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BinaryOperation::Add => write!(f, "+"),
+            BinaryOperation::Multiply => write!(f, "*"),
+        }
     }
 }

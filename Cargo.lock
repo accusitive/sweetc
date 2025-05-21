@@ -103,6 +103,7 @@ dependencies = [
  "hir",
  "infer",
  "parser",
+ "yansi",
 ]
 
 [[package]]
