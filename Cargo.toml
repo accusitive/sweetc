@@ -1,0 +1,11 @@
+[package]
+name = "hm_test"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+parser = {path = "./parser"}
+infer = {path = "./infer"}
+hir = {path = "./hir"}
+bumpalo = "3.17.0"
+ariadne = "0.5.1"
