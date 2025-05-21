@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use bumpalo::Bump;
 pub use parser::parser as ast;
 use parser::{Span, Spanned, parser::SpannedIdentifier};
-pub mod infer;
 pub struct HirLower<'src, 'hir> {
     next_id: usize,
     pub hir_map: HashMap<HirId, HirNode<'hir>>,
@@ -166,12 +165,10 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
                     Definition::Parameter(parameter) => {
                         self.constraints
                             .push((ty.clone(), parameter.ty.kind.clone()));
-                        // ty = parameter.ty.kind.clone();
                     }
                     Definition::Local(hir_id) => {
                         self.constraints
                             .push((ty.clone(), self.expr_types[hir_id].clone()));
-                        // ty = self.expr_types[hir_id].clone();
                     }
                 }
                 ExprKind::Local(d)
@@ -206,8 +203,10 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
                     let explicit_ty = self.lower_ty(t).kind;
                     self.constraints.push((ty.clone(), explicit_ty));
                 }
+
                 let init = self.lower_expression(init);
-                self.constraints.push((ty.clone(), self.expr_types[&init.id].clone()));
+                self.constraints
+                    .push((ty.clone(), self.expr_types[&init.id].clone()));
 
                 self.scope().names.insert(binding.0, def_id);
                 self.def_map.insert(def_id, Definition::Local(init.id));
@@ -284,16 +283,14 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
             match ty {
                 TyKind::Unspecified(tid) => {
                     replace.push((*id, *tid));
-                    // self.expr_types.insert(*id, sub[tid].clone());
                 }
                 _ => {}
             }
         }
-        for (replace,tid) in replace {
+        for (replace, tid) in replace {
             dbg!(&replace, tid);
             if let Some(replacment) = sub.get(&tid) {
                 self.expr_types.insert(replace, replacment.clone());
-
             }
         }
     }
@@ -327,40 +324,9 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
 
         match (ty1, ty2) {
             (TyKind::Unspecified(v), other) | (other, TyKind::Unspecified(v)) => {
-                // if occurs_check(&Ty::TypeVariable(v), &other, &sub) {
-                //     return Err(format!("Occurs check failed: '{}' vs '{}'", v, other));
-                // }
                 sub.insert(v, other);
                 Ok(sub)
             }
-            // (
-            //     Ty::Fn {
-            //         param: p1,
-            //         returns: r1,
-            //     },
-            //     Ty::Fn {
-            //         param: p2,
-            //         returns: r2,
-            //     },
-            // ) => {
-            //     let sub = unify(&*p1, &*p2, sub)?;
-            //     unify(&*r1, &*r2, sub)
-            // }
-            // (
-            //     Ty::App {
-            //         constructor: c1,
-            //         argument: a1,
-            //     },
-            //     Ty::App {
-            //         constructor: c2,
-            //         argument: a2,
-            //     },
-            // ) => {
-            //     let sub = unify(&*c1, &*c2, sub)?;
-            //     unify(&*a1, &*a2, sub)
-            // }
-            // (TyKind::I32(ConcreteTy::I64), TyKind::ConcreteTy(ConcreteTy::Integer)) => Ok(sub),
-            // (Ty::ConcreteTy(ConcreteTy::I32), Ty::ConcreteTy(ConcreteTy::Integer)) => Ok(sub),
             (t1, t2) => Err(format!("Cannot unify '{:?}' and '{:?}'", t1, t2)),
         }
     }

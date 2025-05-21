@@ -7,8 +7,10 @@ type Vec2<T> {
 //    y + y
 //}
 
-fn add(x: i32, y: i32) -> i32 {
-    let result: i64 = x + y;
+fn add<T>(x: T, y: T) -> T {
+    let result = x + y;
 
-    result
+    let intermediate = result;
+
+    intermediate
 }

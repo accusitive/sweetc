@@ -33,6 +33,4 @@ pub fn main() {
             _ => {}
         }
     }
-
-    let i = hir::infer::Inference::new(lctx);
 }
