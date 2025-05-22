@@ -114,6 +114,7 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
     ) {
         let def_id = self.next_def_id();
         let mut hir_parameters = vec![];
+        self.scope().names.insert(name.0, def_id);
         self.push_scope();
         for type_parameter in type_parameters {
             let id = self.next_def_id();
@@ -142,6 +143,7 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
         let body = self.lower_expression(body);
         let body_ty = self.expr_types[&body.id].clone();
         let ret_ty = self.lower_ty(return_ty);
+        self.constraints.push((ret_ty.kind.clone(), body_ty));
 
         self.def_map.insert(
             def_id,
@@ -149,10 +151,11 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
                 ident: *name,
                 parameters: hir_parameters,
                 body: body.id,
+                ty: ret_ty
             }),
         );
         self.pop_scope();
-        self.constraints.push((ret_ty.kind, body_ty));
+        
     }
     pub fn lower_ty(&mut self, ty: &Spanned<ast::Ty<'src>>) -> Ty {
         let kind = match &ty.0 {
@@ -179,7 +182,15 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
     }
     fn get_def_ty(&self, d: &DefId) -> TyKind {
         match &self.def_map[d] {
-            Definition::Function(function_definition) => todo!(),
+            Definition::Function(function_definition) => {
+                
+                let params = function_definition.parameters.iter().map(|p| Ty{ span: Span::from(0..0), kind: self.get_def_ty(p)}).collect::<Vec<_>>();
+
+                TyKind::Function(params, Box::new(function_definition.ty.clone()))
+
+                // let signature = TyKind::Function((), ())
+                // function_definition.ty.kind.clone()
+            },
             Definition::TypeParameter(_) => {
                 todo!()
             }
@@ -365,7 +376,7 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
                         kind: this_expression_ty.clone(),
                     }),
                 );
-                
+
                 self.constraints.push((target_ty.clone(), func_ty));
                 ExprKind::Call(target, self.arena.alloc_slice_fill_iter(args))
             }
@@ -521,6 +532,7 @@ pub struct FunctionDefinition<'src> {
     ident: SpannedIdentifier<'src>,
     parameters: Vec<DefId>,
     body: HirId,
+    ty: Ty
 }
 #[derive(Debug)]
 pub struct Parameter {
