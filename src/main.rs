@@ -1,7 +1,7 @@
 use std::fmt::Write;
 
 use ariadne::{Color, Label, Source};
-use hir::HirLower;
+use hir::{HirLower, TyKind};
 use parser::{lex, parse_string};
 use yansi::Paint;
 
@@ -41,6 +41,23 @@ fn debug_print_ast(before_inference: bool, src: &str, lctx: &HirLower) {
         match &node {
             hir::HirNode::Expression(expression) => {
                 let expr_ty = lctx.expr_types[id].clone();
+                // let pretty_name = |s: &TyKind| match s {
+                //     TyKind::Local(def_id) => {
+                //         match &lctx.def_map[&def_id]{
+                //             hir::Definition::Function(function_definition) => todo!(),
+                //             hir::Definition::Struct(struct_definition) => todo!(),
+                //             hir::Definition::TypeParameter(_) => todo!(),
+                //             hir::Definition::Parameter(parameter) => todo!(),
+                //             hir::Definition::Local(hir_id) => todo!(),
+                //             hir::Definition::ForwardType => todo!(),
+                //         }
+                //     },
+                //     TyKind::Apply(base, args) => {
+                //         format!("{}", pretty_name(&*base.kind))
+                //     }
+                //     _ => format!("{}", s),
+                // };
+
                 let constraints = lctx
                     .constraints
                     .iter()
@@ -50,7 +67,7 @@ fn debug_print_ast(before_inference: bool, src: &str, lctx: &HirLower) {
                             (true, true) => todo!(),
                             (true, false) => format!("{}, ", cons.1),
                             (false, true) => format!("{}, ", cons.0),
-                            (false, false) => todo!()
+                            (false, false) => todo!(),
                         };
                         relevant
                         // format!("{} == {}, ", cons.0, cons.1)
@@ -58,7 +75,10 @@ fn debug_print_ast(before_inference: bool, src: &str, lctx: &HirLower) {
                     .collect::<String>();
                 labels.push(
                     Label::new(("test.sw", expression.span.into_range()))
-                        .with_message(format!("ty: {} constraints: [{}]", lctx.expr_types[id], constraints).paint(col))
+                        .with_message(
+                            format!("ty: {} constraints: [{}]", &lctx.expr_types[id], constraints)
+                                .paint(col),
+                        )
                         .with_color(col),
                 );
             }

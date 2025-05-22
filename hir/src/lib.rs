@@ -25,10 +25,11 @@ pub enum HirNode<'hir> {
 #[derive(Debug)]
 pub enum Definition<'src> {
     Function(FunctionDefinition<'src>),
+    Struct(StructDefinition<'src>),
     TypeParameter(SpannedIdentifier<'src>),
     Parameter(Parameter),
     Local(HirId),
-    Z,
+    ForwardType,
 }
 
 #[derive(Debug, Default)]
@@ -100,9 +101,43 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
         body: &Spanned<ast::TypeDefinitionKind<'src>>,
     ) {
         let id = self.next_def_id();
-        self.def_map.insert(id, Definition::Z);
-
+        self.def_map.insert(id, Definition::ForwardType);
         self.scope().names.insert(name.0, id);
+
+        self.push_scope();
+        self.declare_type_parameters(type_parameters);
+        match &body.0 {
+            TypeDefinitionKind::Struct { fields } => {
+                let fields = fields
+                    .0
+                    .iter()
+                    .map(|field| StructField {
+                        ident: field.0.name,
+                        ty: self.lower_ty(&field.0.ty),
+                        span: field.1,
+                    })
+                    .collect::<Vec<_>>();
+                self.def_map.insert(
+                    id,
+                    Definition::Struct(StructDefinition {
+                        name: *name,
+                        fields: fields,
+                    }),
+                );
+            }
+        }
+        self.pop_scope();
+    }
+    fn declare_type_parameters(
+        &mut self,
+        type_parameters: &Vec<Spanned<ast::TypeParameter<'src>>>,
+    ) {
+        for type_parameter in type_parameters {
+            let id = self.next_def_id();
+            self.def_map
+                .insert(id, Definition::TypeParameter(type_parameter.0.name));
+            self.scope().names.insert(type_parameter.0.name.0, id);
+        }
     }
     pub fn lower_function_definition(
         &mut self,
@@ -116,12 +151,7 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
         let mut hir_parameters = vec![];
         self.scope().names.insert(name.0, def_id);
         self.push_scope();
-        for type_parameter in type_parameters {
-            let id = self.next_def_id();
-            self.def_map
-                .insert(id, Definition::TypeParameter(type_parameter.0.name));
-            self.scope().names.insert(type_parameter.0.name.0, id);
-        }
+        self.declare_type_parameters(type_parameters);
         for parameter in &parameters.0 {
             let def_id = self.next_def_id();
 
@@ -148,14 +178,13 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
         self.def_map.insert(
             def_id,
             Definition::Function(FunctionDefinition {
-                ident: *name,
+                name: *name,
                 parameters: hir_parameters,
                 body: body.id,
-                ty: ret_ty
+                ty: ret_ty,
             }),
         );
         self.pop_scope();
-        
     }
     pub fn lower_ty(&mut self, ty: &Spanned<ast::Ty<'src>>) -> Ty {
         let kind = match &ty.0 {
@@ -183,28 +212,24 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
     fn get_def_ty(&self, d: &DefId) -> TyKind {
         match &self.def_map[d] {
             Definition::Function(function_definition) => {
-                
-                let params = function_definition.parameters.iter().map(|p| Ty{ span: Span::from(0..0), kind: self.get_def_ty(p)}).collect::<Vec<_>>();
+                let params = function_definition
+                    .parameters
+                    .iter()
+                    .map(|p| Ty {
+                        span: Span::from(0..0),
+                        kind: self.get_def_ty(p),
+                    })
+                    .collect::<Vec<_>>();
 
                 TyKind::Function(params, Box::new(function_definition.ty.clone()))
-
-                // let signature = TyKind::Function((), ())
-                // function_definition.ty.kind.clone()
-            },
+            }
             Definition::TypeParameter(_) => {
                 todo!()
             }
-            Definition::Parameter(parameter) => {
-                parameter.ty.kind.clone()
-                // self.constraints
-                // .push((ty.clone(), parameter.ty.kind.clone()));
-            }
-            Definition::Local(hir_id) => {
-                self.expr_types[hir_id].clone()
-                // self.constraints
-                //     .push((ty.clone(), self.expr_types[hir_id].clone()));
-            }
-            Definition::Z => todo!(),
+            Definition::Parameter(parameter) => parameter.ty.kind.clone(),
+            Definition::Local(hir_id) => self.expr_types[hir_id].clone(),
+            Definition::ForwardType => todo!(),
+            Definition::Struct(struct_definition) => todo!(),
         }
     }
     pub fn lower_expression(
@@ -218,7 +243,8 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
                     .resolve_name(i)
                     .expect(&format!("couldn't find name {}", i.0));
                 dbg!(&self.def_map, d);
-                self.constraints.push((this_expression_ty.clone(), self.get_def_ty(&d)));
+                self.constraints
+                    .push((this_expression_ty.clone(), self.get_def_ty(&d)));
                 ExprKind::Local(d)
             }
             ast::Expression::Block(items) => {
@@ -232,8 +258,10 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
                     .collect::<Vec<_>>();
                 self.pop_scope();
                 if let Some(last_expr) = block.last() {
-                    self.constraints
-                        .push((this_expression_ty.clone(), self.expr_types[&last_expr.id].clone()));
+                    self.constraints.push((
+                        this_expression_ty.clone(),
+                        self.expr_types[&last_expr.id].clone(),
+                    ));
                 }
                 let x: &_ = self.arena.alloc_slice_fill_iter(block);
                 ExprKind::Block(x)
@@ -249,8 +277,10 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
                     self.constraints.push((init_ty, explicit_ty));
                 }
                 // set our expr's tyvar = explicit_ty = init_ty
-                self.constraints
-                    .push((this_expression_ty.clone(), self.expr_types[&init.id].clone()));
+                self.constraints.push((
+                    this_expression_ty.clone(),
+                    self.expr_types[&init.id].clone(),
+                ));
 
                 self.scope().names.insert(binding.0, def_id);
                 self.def_map.insert(def_id, Definition::Local(init.id));
@@ -273,8 +303,10 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
 
                 self.constraints.push((cond_ty.clone(), TyKind::Bool));
 
-                self.constraints.push((this_expression_ty.clone(), then_ty.clone()));
-                self.constraints.push((this_expression_ty.clone(), elze_ty.clone()));
+                self.constraints
+                    .push((this_expression_ty.clone(), then_ty.clone()));
+                self.constraints
+                    .push((this_expression_ty.clone(), elze_ty.clone()));
 
                 ExprKind::If(
                     self.arena.alloc(condition),
@@ -290,8 +322,10 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
                 let rty = &self.expr_types[&r.id];
 
                 self.constraints.push((lty.clone(), rty.clone()));
-                self.constraints.push((this_expression_ty.clone(), lty.clone()));
-                self.constraints.push((this_expression_ty.clone(), rty.clone()));
+                self.constraints
+                    .push((this_expression_ty.clone(), lty.clone()));
+                self.constraints
+                    .push((this_expression_ty.clone(), rty.clone()));
 
                 ExprKind::BinaryOperation(self.arena.alloc(l), op.clone(), self.arena.alloc(r))
             }
@@ -310,14 +344,17 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
                     span: Span::from(0..0),
                 };
 
-                self.constraints
-                    .push((this_expression_ty.clone(), TyKind::Apply(Box::new(option), vec![arg])));
+                self.constraints.push((
+                    this_expression_ty.clone(),
+                    TyKind::Apply(Box::new(option), vec![arg]),
+                ));
 
                 ExprKind::Some(inner)
             }
             ast::Expression::Literal(literal) => match literal {
                 ast::Literal::Boolean(boolean_literal) => {
-                    self.constraints.push((this_expression_ty.clone(), TyKind::Bool));
+                    self.constraints
+                        .push((this_expression_ty.clone(), TyKind::Bool));
                     ExprKind::Literal(literal.clone())
                 }
             },
@@ -349,7 +386,8 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
                 let ret = self.lower_ty(returns);
                 self.constraints.push((body_ty.clone(), ret.kind.clone()));
                 let func_ty = TyKind::Function(parameter_tys, Box::new(ret));
-                self.constraints.push((this_expression_ty.clone(), func_ty.clone()));
+                self.constraints
+                    .push((this_expression_ty.clone(), func_ty.clone()));
 
                 ExprKind::Closure(func_ty.clone(), body)
             }
@@ -529,10 +567,21 @@ pub enum TyKind {
 }
 #[derive(Debug)]
 pub struct FunctionDefinition<'src> {
-    ident: SpannedIdentifier<'src>,
+    pub name: SpannedIdentifier<'src>,
     parameters: Vec<DefId>,
     body: HirId,
-    ty: Ty
+    ty: Ty,
+}
+#[derive(Debug)]
+pub struct StructDefinition<'src> {
+    pub name: SpannedIdentifier<'src>,
+    fields: Vec<StructField<'src>>,
+}
+#[derive(Debug)]
+pub struct StructField<'src> {
+    ident: SpannedIdentifier<'src>,
+    ty: Ty,
+    span: Span,
 }
 #[derive(Debug)]
 pub struct Parameter {
