@@ -79,7 +79,7 @@ fn debug_print_ast(before_inference: bool, src: &str, lctx: &HirLower) {
                             hir::Definition::Function(function_definition) => todo!(),
                             hir::Definition::Struct(struct_definition) => todo!(),
                             hir::Definition::TypeParameter(i) => {
-                                format!("{}", i.0)
+                                format!("{}", i)
                             }
                             hir::Definition::Parameter(parameter) => todo!(),
                             hir::Definition::Local(hir_id) => todo!(),

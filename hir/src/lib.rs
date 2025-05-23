@@ -1,3 +1,4 @@
+use core::panic;
 use std::{any::Any, collections::HashMap, fmt::Display, ops::Deref, panic::UnwindSafe};
 
 use bumpalo::Bump;
@@ -19,6 +20,8 @@ pub struct HirLower<'src, 'hir> {
     pub expr_types: HashMap<HirId, TyKind>,
     pub constraints: Vec<(TyKind, TyKind)>,
 
+    pub generic_env: Vec<Ty>,
+
     pub scopes: Vec<Scope<'src>>,
     pub arena: &'hir Bump,
 }
@@ -31,7 +34,7 @@ pub enum HirNode<'hir> {
 pub enum Definition<'src> {
     Function(FunctionDefinition<'src>),
     Struct(StructDefinition<'src>),
-    TypeParameter(SpannedIdentifier<'src>),
+    TypeParameter(usize),
     Parameter(Parameter),
     Local(HirId),
     ForwardType,
@@ -56,6 +59,7 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
             def_map: HashMap::new(),
             hir_map: HashMap::new(),
             expr_types: HashMap::new(),
+            generic_env: vec![],
             constraints: vec![],
             next_id: 0,
         }
@@ -137,11 +141,12 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
         &mut self,
         type_parameters: &Vec<Spanned<ast::TypeParameter<'src>>>,
     ) {
+        let mut i = 0;
         for type_parameter in type_parameters {
             let id = self.next_def_id();
-            self.def_map
-                .insert(id, Definition::TypeParameter(type_parameter.0.name));
+            self.def_map.insert(id, Definition::TypeParameter(i));
             self.scope().names.insert(type_parameter.0.name.0, id);
+            i += 1;
         }
     }
     pub fn lower_function_definition(
@@ -185,6 +190,7 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
             Definition::Function(FunctionDefinition {
                 name: *name,
                 parameters: hir_parameters,
+                type_parameters: type_parameters.to_owned(),
                 body: body.id,
                 ty: ret_ty,
             }),
@@ -220,7 +226,17 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
                         args,
                     )
                 } else {
-                    TyKind::Local(self.resolve_name(&seg.0.name).unwrap())
+                    let def_id = self.resolve_name(&seg.0.name).unwrap();
+                    match self.def_map[&def_id] {
+                        Definition::TypeParameter(i) => {
+                            if self.generic_env.len() > 0 {
+                                self.generic_env[i].kind.clone()
+                            } else {
+                                TyKind::Local(def_id)
+                            }
+                        }
+                        _ => TyKind::Local(def_id),
+                    }
                 }
             }
             ast::Ty::Bool => TyKind::Bool,
@@ -255,6 +271,24 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
         &mut self,
         expr: &Spanned<ast::Expression<'src>>,
     ) -> &'hir Expression<'hir> {
+
+        let patch = |this: &mut Self, t| match t {
+            TyKind::Local(def_id)
+                if matches!(
+                    this.def_map[&def_id],
+                    Definition::TypeParameter(_)
+                ) =>
+            {
+                match this.def_map[&def_id] {
+                    Definition::TypeParameter(idx) => {
+                        TyKind::Unspecified(this.next_ty_id())
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            x => x,
+        };
+
         let this_expression_ty = TyKind::Unspecified(self.next_ty_id());
         let kind = match &expr.0 {
             ast::Expression::Path(p) => {
@@ -412,45 +446,77 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
 
                 ExprKind::Closure(func_ty.clone(), body)
             }
-            ast::Expression::Call(target, items) => {
-                let target = self.lower_expression(target.deref());
-                let target_ty = self.expr_types[&target.id].clone();
+            ast::Expression::Call(callee, arguments) => {
+                let callee = self.lower_expression(&callee);
+                // match callee.kind {
+                //     ExprKind::Local(def_id) => match &self.def_map[&def_id] {
+                //         Definition::Function(function_definition) => {}
+                //         _ => todo!(),
+                //     },
+                //     _ => todo!(),
+                // };
+                // let callee_type = &self.expr_types[&callee.id];
+                // match callee_type {
+                //     TyKind::Function(items, ty) => {
 
-                let args = items
+                //     }
+                //     _ => panic!("call on non function")
+                // };
+  
+
+                let argument_types = arguments
+                    .iter()
+                    .map(|a| {
+                        let id = &self.lower_expression(a).id;
+                        patch(self, self.expr_types[id].clone())
+                    })
+                    .collect::<Vec<_>>();
+
+                let instantiated_argument_types = argument_types
+                    .into_iter()
+                    .map(|t| Ty {
+                        kind: patch(self, t),
+                        span: Span::from(0..0),
+                    })
+                    .collect::<Vec<_>>();
+
+                // let params = (0..arguments.len())
+                //     .map(|_| Ty {
+                //         span: Span::from(0..0),
+                //         kind: TyKind::Unspecified(self.next_ty_id()),
+                //     })
+                //     .collect::<Vec<_>>();
+                // self.generic_env.extend(params.clone());
+
+                let args = arguments
                     .iter()
                     .map(|a| self.lower_expression(a))
                     .collect::<Vec<_>>();
 
-                let arg_tys = args
-                    .iter()
-                    .map(|e| Ty {
-                        span: Span::from(0..0),
-                        kind: self.expr_types[&e.id].clone(),
-                    })
-                    .collect::<Vec<_>>();
+                // let argument_type_variables = args
+                //     .iter()
+                //     .map(|e| Ty {
+                //         span: Span::from(0..0),
+                //         kind: self.expr_types[&e.id].clone(),
+                //     })
+                //     .collect::<Vec<_>>();
 
-                let params = arg_tys
-                    .iter()
-                    .map(|_| Ty {
-                        span: Span::from(0..0),
-                        kind: TyKind::Unspecified(self.next_ty_id()),
-                    })
-                    .collect::<Vec<_>>();
+                // for (a, p) in argument_type_variables.iter().zip(params.iter()) {
+                //     self.constraints.push((a.kind.clone(), p.kind.clone()));
+                // }
 
-                for (a, p) in arg_tys.iter().zip(params.iter()) {
-                    self.constraints.push((a.kind.clone(), p.kind.clone()));
-                }
-                
                 let func_ty = TyKind::Function(
-                    params,
+                    instantiated_argument_types,
                     Box::new(Ty {
                         span: Span::from(0..0),
                         kind: this_expression_ty.clone(),
                     }),
                 );
 
+                let target_ty = self.expr_types[&callee.id].clone();
+
                 self.constraints.push((target_ty.clone(), func_ty));
-                ExprKind::Call(target, self.arena.alloc_slice_fill_iter(args))
+                ExprKind::Call(callee, self.arena.alloc_slice_fill_iter(args))
             }
             ast::Expression::X => todo!(),
         };
@@ -474,22 +540,6 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
         }
         Some(def)
     }
-    // pub fn resolve_path(&mut self, path: &Path) -> Option<()>{
-
-    //     for scope in self.scopes.iter().rev() {
-    //         if let Some(def_id) = scope.names.get(&path.segments[0].0.name.0) {
-    //             match &self.def_map[def_id] {
-    //                 Definition::Function(function_definition) => todo!(),
-    //                 Definition::Struct(struct_definition) => todo!(),
-    //                 Definition::TypeParameter(_) => todo!(),
-    //                 Definition::Parameter(parameter) => todo!(),
-    //                 Definition::Local(hir_id) => todo!(),
-    //                 Definition::ForwardType => todo!(),
-    //             }
-    //         }
-    //     }
-    //     todo!()
-    // }
     pub fn resolve_name(&mut self, name: &SpannedIdentifier) -> Option<DefId> {
         for scope in self.scopes.iter().rev() {
             if let Some(def_id) = scope.names.get(name.0) {
@@ -600,21 +650,6 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
                 sub = self.unify(&r1.kind, &r2.kind, sub)?;
 
                 Ok(sub)
-            }
-            (TyKind::Local(local), other) | (other, TyKind::Local(local)) => {
-                let local_def = &self.def_map[&local];
-
-                match local_def {
-                    Definition::TypeParameter(_) => {
-                        // sub = self.unify(&TyKind::Local(local), &other, sub)?;
-                    }
-                    _ => todo!(),
-                }
-                Ok(sub)
-                // match (left, other) {
-                //     (Definition::TypeParameter(_), Definition::TypeParameter(_)) => Ok(sub),
-                //     x => todo!("{:#?}", x),
-                // }
             }
             (t1, t2) => Err(format!("Cannot unify '{:?}' and '{:?}'", t1, t2)),
         }

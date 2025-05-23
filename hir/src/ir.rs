@@ -2,6 +2,7 @@ use std::{collections::HashMap, fmt::Display};
 
 use crate::ast;
 use crate::{DefId, HirId};
+use parser::Spanned;
 use parser::{Span, parser::SpannedIdentifier};
 
 pub type Subs = HashMap<usize, TyKind>;
@@ -28,6 +29,7 @@ pub enum TyKind {
 #[derive(Debug)]
 pub struct FunctionDefinition<'src> {
     pub name: SpannedIdentifier<'src>,
+    pub type_parameters: Vec<Spanned<ast::TypeParameter<'src>>>,
     pub parameters: Vec<DefId>,
     pub body: HirId,
     pub ty: Ty,
