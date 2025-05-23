@@ -446,20 +446,6 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
             }
             ast::Expression::Call(callee, arguments) => {
                 let callee = self.lower_expression(&callee);
-                // match callee.kind {
-                //     ExprKind::Local(def_id) => match &self.def_map[&def_id] {
-                //         Definition::Function(function_definition) => {}
-                //         _ => todo!(),
-                //     },
-                //     _ => todo!(),
-                // };
-                // let callee_type = &self.expr_types[&callee.id];
-                // match callee_type {
-                //     TyKind::Function(items, ty) => {
-
-                //     }
-                //     _ => panic!("call on non function")
-                // };
 
                 let argument_types = arguments
                     .iter()
@@ -477,13 +463,6 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
                     })
                     .collect::<Vec<_>>();
 
-                // let params = (0..arguments.len())
-                //     .map(|_| Ty {
-                //         span: Span::from(0..0),
-                //         kind: TyKind::Unspecified(self.next_ty_id()),
-                //     })
-                //     .collect::<Vec<_>>();
-                // self.generic_env.extend(params.clone());
 
                 let args = arguments
                     .iter()
@@ -494,17 +473,6 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
                     let ta = &self.expr_types[&argument_expr.id];
                     self.constraints.push((ta.clone(), instantiated_argument_ty.kind.clone()));
                 }
-                // let argument_type_variables = args
-                //     .iter()
-                //     .map(|e| Ty {
-                //         span: Span::from(0..0),
-                //         kind: self.expr_types[&e.id].clone(),
-                //     })
-                //     .collect::<Vec<_>>();
-
-                // for (a, p) in argument_type_variables.iter().zip(params.iter()) {
-                //     self.constraints.push((a.kind.clone(), p.kind.clone()));
-                // }
 
                 let func_ty = TyKind::Function(
                     instantiated_argument_types,
