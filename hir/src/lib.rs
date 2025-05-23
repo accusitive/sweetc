@@ -271,18 +271,12 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
         &mut self,
         expr: &Spanned<ast::Expression<'src>>,
     ) -> &'hir Expression<'hir> {
-
         let patch = |this: &mut Self, t| match t {
             TyKind::Local(def_id)
-                if matches!(
-                    this.def_map[&def_id],
-                    Definition::TypeParameter(_)
-                ) =>
+                if matches!(this.def_map[&def_id], Definition::TypeParameter(_)) =>
             {
                 match this.def_map[&def_id] {
-                    Definition::TypeParameter(idx) => {
-                        TyKind::Unspecified(this.next_ty_id())
-                    }
+                    Definition::TypeParameter(idx) => TyKind::Unspecified(this.next_ty_id()),
                     _ => unreachable!(),
                 }
             }
@@ -297,9 +291,13 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
                     .expect(&format!("couldn't find name {:?}", p));
 
                 dbg!(&self.def_map, d);
-
-                self.constraints
-                    .push((this_expression_ty.clone(), self.get_def_ty(&d)));
+                match &self.def_map[&d] {
+                    Definition::Function(_) => {}
+                    _ => {
+                        self.constraints
+                            .push((this_expression_ty.clone(), self.get_def_ty(&d)));
+                    }
+                };
                 ExprKind::Local(d)
             }
             ast::Expression::Block(items) => {
@@ -462,7 +460,6 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
                 //     }
                 //     _ => panic!("call on non function")
                 // };
-  
 
                 let argument_types = arguments
                     .iter()
@@ -493,6 +490,10 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
                     .map(|a| self.lower_expression(a))
                     .collect::<Vec<_>>();
 
+                for (argument_expr, instantiated_argument_ty) in args.iter().zip(instantiated_argument_types.iter()) {
+                    let ta = &self.expr_types[&argument_expr.id];
+                    self.constraints.push((ta.clone(), instantiated_argument_ty.kind.clone()));
+                }
                 // let argument_type_variables = args
                 //     .iter()
                 //     .map(|e| Ty {
@@ -513,9 +514,9 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
                     }),
                 );
 
-                let target_ty = self.expr_types[&callee.id].clone();
-
+                let target_ty = patch(self, self.expr_types[&callee.id].clone());
                 self.constraints.push((target_ty.clone(), func_ty));
+
                 ExprKind::Call(callee, self.arena.alloc_slice_fill_iter(args))
             }
             ast::Expression::X => todo!(),
