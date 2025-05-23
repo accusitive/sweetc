@@ -27,7 +27,7 @@ pub enum Keyword {
     Match,
     Else,
     Let,
-    Some
+    Some,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Punctuation {
@@ -48,7 +48,7 @@ pub enum Punctuation {
     Equal,
     Semicolon,
     Plus,
-    Star
+    Star,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LiteralTok<'a> {
@@ -116,6 +116,7 @@ pub fn lexer<'src>()
         just('*').map(|_| Punctuation::Star),
     ))
     .map(|p| Token::Punctuation(p));
+
     let int_literal = text::int::<_, _>(10)
         .from_str()
         .unwrapped()

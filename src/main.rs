@@ -1,7 +1,7 @@
 use std::fmt::Write;
 
 use ariadne::{Color, Label, Source};
-use hir::{HirLower, TyKind};
+use hir::{HirLower, ir::TyKind};
 use parser::{lex, parse_string};
 use yansi::Paint;
 
@@ -10,7 +10,7 @@ pub fn main() {
     let tokens = lex(src).unwrap();
     let ast = parse_string(&tokens, src).unwrap();
     dbg!(&ast);
-    println!("{}", ast.0);
+    // println!("{}", ast.0);
 
     let arena = bumpalo::Bump::new();
 
@@ -73,11 +73,25 @@ fn debug_print_ast(before_inference: bool, src: &str, lctx: &HirLower) {
                         // format!("{} == {}, ", cons.0, cons.1)
                     })
                     .collect::<String>();
+                let t = match &lctx.expr_types[id] {
+                    TyKind::Local(id) => {
+                        match &lctx.def_map[id] {
+                            hir::Definition::Function(function_definition) => todo!(),
+                            hir::Definition::Struct(struct_definition) => todo!(),
+                            hir::Definition::TypeParameter(i) => {
+                                format!("{}", i.0)
+                            }
+                            hir::Definition::Parameter(parameter) => todo!(),
+                            hir::Definition::Local(hir_id) => todo!(),
+                            hir::Definition::ForwardType => todo!(),
+                        }
+                    }
+                    tyk => format!("{}", tyk)
+                };
                 labels.push(
                     Label::new(("test.sw", expression.span.into_range()))
                         .with_message(
-                            format!("ty: {} constraints: [{}]", &lctx.expr_types[id], constraints)
-                                .paint(col),
+                            format!("ty: {} constraints: [{}]", t, constraints).paint(col),
                         )
                         .with_color(col),
                 );

@@ -1,10 +1,15 @@
-use std::{collections::HashMap, fmt::Display, ops::Deref, panic::UnwindSafe};
+use std::{any::Any, collections::HashMap, fmt::Display, ops::Deref, panic::UnwindSafe};
 
 use bumpalo::Bump;
+use ir::{
+    ExprKind, Expression, FunctionDefinition, Parameter, StructDefinition, StructField, Subs, Ty,
+    TyKind,
+};
 pub use parser::parser as ast;
+pub mod ir;
 use parser::{
     Span, Spanned,
-    parser::{BinaryOperation, SpannedIdentifier, TypeDefinitionKind},
+    parser::{BinaryOperation, Path, SpannedIdentifier, TypeDefinitionKind},
 };
 pub struct HirLower<'src, 'hir> {
     next_id: usize,
@@ -196,14 +201,28 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
 
                 TyKind::Function(params, Box::new(self.lower_ty(ret.deref())))
             }
-            ast::Ty::Name(name) => TyKind::Local(self.resolve_name(&name).unwrap()),
-            ast::Ty::Apply(base, type_args) => TyKind::Apply(
-                Box::new(self.lower_ty(base.deref())),
-                type_args
-                    .iter()
-                    .map(|t| self.lower_ty(t))
-                    .collect::<Vec<_>>(),
-            ),
+            ast::Ty::Name(name) => {
+                let seg = &name.segments[0];
+
+                if seg.0.ty_arguments.len() > 0 {
+                    let args = seg
+                        .0
+                        .ty_arguments
+                        .iter()
+                        .map(|a| self.lower_ty(a))
+                        .collect();
+
+                    TyKind::Apply(
+                        Box::new(Ty {
+                            kind: TyKind::Local(self.resolve_name(&seg.0.name).unwrap()),
+                            span: seg.1,
+                        }),
+                        args,
+                    )
+                } else {
+                    TyKind::Local(self.resolve_name(&seg.0.name).unwrap())
+                }
+            }
             ast::Ty::Bool => TyKind::Bool,
         };
 
@@ -238,11 +257,13 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
     ) -> &'hir Expression<'hir> {
         let this_expression_ty = TyKind::Unspecified(self.next_ty_id());
         let kind = match &expr.0 {
-            ast::Expression::Path(i) => {
+            ast::Expression::Path(p) => {
                 let d = self
-                    .resolve_name(i)
-                    .expect(&format!("couldn't find name {}", i.0));
+                    .resolve_path(p)
+                    .expect(&format!("couldn't find name {:?}", p));
+
                 dbg!(&self.def_map, d);
+
                 self.constraints
                     .push((this_expression_ty.clone(), self.get_def_ty(&d)));
                 ExprKind::Local(d)
@@ -399,6 +420,7 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
                     .iter()
                     .map(|a| self.lower_expression(a))
                     .collect::<Vec<_>>();
+
                 let arg_tys = args
                     .iter()
                     .map(|e| Ty {
@@ -407,8 +429,20 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
                     })
                     .collect::<Vec<_>>();
 
+                let params = arg_tys
+                    .iter()
+                    .map(|_| Ty {
+                        span: Span::from(0..0),
+                        kind: TyKind::Unspecified(self.next_ty_id()),
+                    })
+                    .collect::<Vec<_>>();
+
+                for (a, p) in arg_tys.iter().zip(params.iter()) {
+                    self.constraints.push((a.kind.clone(), p.kind.clone()));
+                }
+                
                 let func_ty = TyKind::Function(
-                    arg_tys,
+                    params,
                     Box::new(Ty {
                         span: Span::from(0..0),
                         kind: this_expression_ty.clone(),
@@ -432,6 +466,30 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
 
         e
     }
+    pub fn resolve_path(&mut self, path: &Path) -> Option<DefId> {
+        let effective_segment = &path.segments[0];
+        let def = self.resolve_name(&effective_segment.0.name)?;
+        if path.segments.len() > 1 {
+            todo!()
+        }
+        Some(def)
+    }
+    // pub fn resolve_path(&mut self, path: &Path) -> Option<()>{
+
+    //     for scope in self.scopes.iter().rev() {
+    //         if let Some(def_id) = scope.names.get(&path.segments[0].0.name.0) {
+    //             match &self.def_map[def_id] {
+    //                 Definition::Function(function_definition) => todo!(),
+    //                 Definition::Struct(struct_definition) => todo!(),
+    //                 Definition::TypeParameter(_) => todo!(),
+    //                 Definition::Parameter(parameter) => todo!(),
+    //                 Definition::Local(hir_id) => todo!(),
+    //                 Definition::ForwardType => todo!(),
+    //             }
+    //         }
+    //     }
+    //     todo!()
+    // }
     pub fn resolve_name(&mut self, name: &SpannedIdentifier) -> Option<DefId> {
         for scope in self.scopes.iter().rev() {
             if let Some(def_id) = scope.names.get(name.0) {
@@ -470,7 +528,7 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
         let mut sub = HashMap::new();
 
         for (lhs, rhs) in &self.constraints {
-            sub = Self::unify(lhs, rhs, sub).unwrap();
+            sub = self.unify(lhs, rhs, sub).unwrap();
         }
         sub
     }
@@ -502,7 +560,7 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
             x => x.clone(),
         }
     }
-    fn unify(ty1: &TyKind, ty2: &TyKind, mut sub: Subs) -> Result<Subs, String> {
+    fn unify(&self, ty1: &TyKind, ty2: &TyKind, mut sub: Subs) -> Result<Subs, String> {
         let ty1 = Self::apply(ty1, &sub);
         let ty2 = Self::apply(ty2, &sub);
 
@@ -524,135 +582,41 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
                 }
 
                 // Ensure base is compatible
-                sub = Self::unify(&left_base.kind, &right_base.kind, sub)?;
+                sub = self.unify(&left_base.kind, &right_base.kind, sub)?;
                 // Ensure inner values are compatible
                 for (left_arg, right_arg) in left_args.iter().zip(right_args.iter()) {
-                    sub = Self::unify(&left_arg.kind, &right_arg.kind, sub)?;
+                    sub = self.unify(&left_arg.kind, &right_arg.kind, sub)?;
                 }
 
                 Ok(sub)
             }
             (TyKind::Function(p1, r1), TyKind::Function(p2, r2)) => {
-                for (left_param, right_param) in p1.iter().zip(p2.iter()) {
-                    sub = Self::unify(&left_param.kind, &right_param.kind, sub)?;
+                if p1.len() != p2.len() {
+                    return Err("Mismatched function parameter count".to_string());
                 }
-                sub = Self::unify(&r1.kind, &r2.kind, sub)?;
+                for (left_param, right_param) in p1.iter().zip(p2.iter()) {
+                    sub = self.unify(&left_param.kind, &right_param.kind, sub)?;
+                }
+                sub = self.unify(&r1.kind, &r2.kind, sub)?;
 
                 Ok(sub)
             }
+            (TyKind::Local(local), other) | (other, TyKind::Local(local)) => {
+                let local_def = &self.def_map[&local];
+
+                match local_def {
+                    Definition::TypeParameter(_) => {
+                        // sub = self.unify(&TyKind::Local(local), &other, sub)?;
+                    }
+                    _ => todo!(),
+                }
+                Ok(sub)
+                // match (left, other) {
+                //     (Definition::TypeParameter(_), Definition::TypeParameter(_)) => Ok(sub),
+                //     x => todo!("{:#?}", x),
+                // }
+            }
             (t1, t2) => Err(format!("Cannot unify '{:?}' and '{:?}'", t1, t2)),
-        }
-    }
-}
-type Subs = HashMap<usize, TyKind>;
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub struct Ty {
-    kind: TyKind,
-    span: Span,
-}
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub enum TyKind {
-    I32,
-    I64,
-    Bool,
-
-    // Internal type for inference
-    Unspecified(usize),
-    // Reference to a definition, ie: Type Parameter, Struct, Enum, type Alias
-    Local(DefId),
-    // Base<A,R,G,S>
-    Apply(Box<Ty>, Vec<Ty>),
-
-    Function(Vec<Ty>, Box<Ty>),
-}
-#[derive(Debug)]
-pub struct FunctionDefinition<'src> {
-    pub name: SpannedIdentifier<'src>,
-    parameters: Vec<DefId>,
-    body: HirId,
-    ty: Ty,
-}
-#[derive(Debug)]
-pub struct StructDefinition<'src> {
-    pub name: SpannedIdentifier<'src>,
-    fields: Vec<StructField<'src>>,
-}
-#[derive(Debug)]
-pub struct StructField<'src> {
-    ident: SpannedIdentifier<'src>,
-    ty: Ty,
-    span: Span,
-}
-#[derive(Debug)]
-pub struct Parameter {
-    def_id: DefId,
-    ty: Ty,
-    span: Span,
-}
-#[derive(Debug)]
-pub struct Expression<'hir> {
-    pub id: HirId,
-    pub kind: ExprKind<'hir>,
-    pub span: Span,
-}
-#[derive(Debug)]
-pub enum ExprKind<'hir> {
-    Block(&'hir [&'hir Expression<'hir>]),
-    Let(&'hir Expression<'hir>),
-    If(
-        &'hir Expression<'hir>,
-        &'hir Expression<'hir>,
-        &'hir Expression<'hir>,
-    ),
-    BinaryOperation(
-        &'hir Expression<'hir>,
-        ast::BinaryOperation,
-        &'hir Expression<'hir>,
-    ),
-    Local(DefId),
-    Some(&'hir Expression<'hir>),
-    Literal(ast::Literal),
-    Closure(TyKind, &'hir Expression<'hir>),
-    Call(&'hir Expression<'hir>, &'hir [&'hir Expression<'hir>]),
-}
-
-impl Display for Ty {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.kind)
-    }
-}
-impl Display for TyKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TyKind::I32 => write!(f, "i32"),
-            TyKind::I64 => write!(f, "i64"),
-            TyKind::Unspecified(num) => write!(f, "_{num}"),
-            TyKind::Local(def_id) => write!(f, "_local{}", def_id.0),
-            TyKind::Apply(ty, items) => {
-                write!(f, "{}", ty)?;
-                write!(f, "<")?;
-                for (item, i) in items.iter().zip(0..) {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{}", item)?;
-                }
-                write!(f, ">")
-            }
-            TyKind::Bool => write!(f, "bool"),
-            TyKind::Function(items, ty) => {
-                write!(f, "fn")?;
-                write!(f, "(")?;
-                for (item, i) in items.iter().zip(0..) {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{}", item)?;
-                }
-                write!(f, ")")?;
-
-                write!(f, " -> {}", ty)
-            }
         }
     }
 }

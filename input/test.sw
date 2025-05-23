@@ -1,11 +1,6 @@
-type Option<T> {
-    value: T
+fn add<T>(l: T, r: T) -> T {
+    l + r
 }
-
-fn wrap<T, U>(v: T, control: bool, t: fn(T) -> U, f: fn(T) -> U) -> Option<U> {
-    if control {
-        some t<_>(v)
-    } else {
-        some f<_>(v)
-    }
+fn main(n: i32) -> i32 {
+    add(n, n)
 }

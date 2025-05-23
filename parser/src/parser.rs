@@ -55,7 +55,15 @@ pub struct Parameter<'a> {
 pub struct TypeParameter<'a> {
     pub name: SpannedIdentifier<'a>, // bounds
 }
-
+#[derive(Debug, Clone)]
+pub struct Path<'a> {
+    pub segments: Vec<Spanned<PathSegment<'a>>>,
+}
+#[derive(Debug, Clone)]
+pub struct PathSegment<'a> {
+    pub name: SpannedIdentifier<'a>,
+    pub ty_arguments: Vec<Spanned<Ty<'a>>>,
+}
 #[derive(Debug, Clone)]
 pub enum Ty<'a> {
     Infer,
@@ -63,8 +71,7 @@ pub enum Ty<'a> {
     I64,
     Bool,
     Fn(Spanned<Vec<Spanned<Self>>>, Box<Spanned<Self>>),
-    Apply(Box<Spanned<Self>>, Vec<Spanned<Ty<'a>>>),
-    Name(SpannedIdentifier<'a>),
+    Name(Path<'a>),
 }
 #[derive(Debug, Clone)]
 
@@ -74,7 +81,7 @@ pub enum BinaryOperation {
 }
 #[derive(Debug, Clone)]
 pub enum Expression<'a> {
-    Path(SpannedIdentifier<'a>),
+    Path(Path<'a>),
     Block(Vec<Spanned<Self>>),
     Let(
         SpannedIdentifier<'a>,
@@ -118,7 +125,28 @@ pub fn ty<'src, I: BorrowInput<'src, Token = Token<'src>, Span = Span>>()
         let int64 = just(Token::Keyword(Keyword::I64)).map(|_| Ty::I64);
         let bool = just(Token::Keyword(Keyword::Bool)).map(|_| Ty::Bool);
 
-        let name = identifier().map(|i| Ty::Name(i));
+        // inline so I dont have to deal with recursion, duplicatedin expr
+        let segment = identifier()
+            .then(
+                ty.clone()
+                    .separated_by(just(Token::Punctuation(Punctuation::Comma)))
+                    .collect::<Vec<_>>()
+                    .delimited_by(
+                        just(Token::Punctuation(Punctuation::LeftAngle)),
+                        just(Token::Punctuation(Punctuation::RightAngle)),
+                    )
+                    .or_not()
+                    .map(|v| v.unwrap_or_default()),
+            )
+            .map_with(|(name, ty_arguments), e| (PathSegment { name, ty_arguments }, e.span()));
+
+        let path = segment
+            .separated_by(just(Token::Punctuation(Punctuation::ColonColon)))
+            .at_least(1)
+            .collect::<Vec<_>>()
+            .map(|segs| Path { segments: segs });
+
+        let name = path.map(|p| Ty::Name(p));
 
         let params = ty
             .clone()
@@ -139,20 +167,7 @@ pub fn ty<'src, I: BorrowInput<'src, Token = Token<'src>, Span = Span>>()
         let main_ty =
             choice((int32, int64, bool, infer, func, name)).map_with(|t, e| (t, e.span()));
 
-        let ty_arguments = ty
-            .clone()
-            .separated_by(just(Token::Punctuation(Punctuation::Comma)))
-            .collect::<Vec<_>>()
-            .delimited_by(
-                just(Token::Punctuation(Punctuation::LeftAngle)),
-                just(Token::Punctuation(Punctuation::RightAngle)),
-            );
-        let constructor = main_ty
-            .clone()
-            .then(ty_arguments)
-            .map_with(|(t, params), e| (Ty::Apply(Box::new(t), params), e.span()));
-
-        let k = constructor.or(main_ty);
+        let k = main_ty;
 
         k
     })
@@ -204,7 +219,27 @@ pub fn expr<'src, I: BorrowInput<'src, Token = Token<'src>, Span = Span>>()
 
         let literal = r#true.or(r#false);
 
-        let path = identifier().map_with(|i, e| (Expression::Path(i), e.span()));
+        // inline so I dont have to deal with recursion, duplicatedin expr
+        let segment = identifier()
+            .then(
+                ty().separated_by(just(Token::Punctuation(Punctuation::Comma)))
+                    .collect::<Vec<_>>()
+                    .delimited_by(
+                        just(Token::Punctuation(Punctuation::LeftAngle)),
+                        just(Token::Punctuation(Punctuation::RightAngle)),
+                    )
+                    .or_not()
+                    .map(|v| v.unwrap_or_default()),
+            )
+            .map_with(|(name, ty_arguments), e| (PathSegment { name, ty_arguments }, e.span()));
+
+        let path = segment
+            .separated_by(just(Token::Punctuation(Punctuation::ColonColon)))
+            .at_least(1)
+            .collect::<Vec<_>>()
+            .map(|segs| Path { segments: segs });
+        let path = path.map_with(|p, e| (Expression::Path(p), e.span()));
+
         let annotated_let_expr = just(Token::Keyword(Keyword::Let))
             .ignore_then(identifier())
             .then_ignore(just(Token::Punctuation(Punctuation::Colon)))
@@ -311,9 +346,7 @@ pub fn expr<'src, I: BorrowInput<'src, Token = Token<'src>, Span = Span>>()
                         just(Token::Punctuation(Punctuation::LeftParen)),
                         just(Token::Punctuation(Punctuation::RightParen)),
                     ),
-                |target, args, e| {
-                    (Expression::Call(Box::new(target), args), e.span())
-                },
+                |target, args, e| (Expression::Call(Box::new(target), args), e.span()),
             );
 
             atom.pratt((addition, multiplication, call))
