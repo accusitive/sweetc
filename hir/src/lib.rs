@@ -130,7 +130,7 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
                     id,
                     Definition::Struct(StructDefinition {
                         name: *name,
-                        fields: fields,
+                        fields,
                     }),
                 );
             }
@@ -276,7 +276,7 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
                 if matches!(this.def_map[&def_id], Definition::TypeParameter(_)) =>
             {
                 match this.def_map[&def_id] {
-                    Definition::TypeParameter(idx) => TyKind::Unspecified(this.next_ty_id()),
+                    Definition::TypeParameter(_idx) => TyKind::Unspecified(this.next_ty_id()),
                     _ => unreachable!(),
                 }
             }
@@ -289,6 +289,12 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
                 let d = self
                     .resolve_path(p)
                     .expect(&format!("couldn't find name {:?}", p));
+                let ta = p.segments[0]
+                    .0
+                    .ty_arguments
+                    .iter()
+                    .map(|t| self.lower_ty(t))
+                    .collect();
 
                 dbg!(&self.def_map, d);
                 match &self.def_map[&d] {
@@ -298,7 +304,7 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
                             .push((this_expression_ty.clone(), self.get_def_ty(&d)));
                     }
                 };
-                ExprKind::Local(d)
+                ExprKind::Local(ta, d)
             }
             ast::Expression::Block(items) => {
                 self.push_scope();
@@ -446,46 +452,113 @@ impl<'src, 'hir> HirLower<'src, 'hir> {
             }
             ast::Expression::Call(callee, arguments) => {
                 let callee = self.lower_expression(&callee);
+                let callee_ty = self.expr_types[&callee.id].clone();
 
-                let argument_types = arguments
-                    .iter()
-                    .map(|a| {
-                        let id = &self.lower_expression(a).id;
-                        patch(self, self.expr_types[id].clone())
-                    })
-                    .collect::<Vec<_>>();
-
-                let instantiated_argument_types = argument_types
-                    .into_iter()
-                    .map(|t| Ty {
-                        kind: patch(self, t),
-                        span: Span::from(0..0),
-                    })
-                    .collect::<Vec<_>>();
-
-
-                let args = arguments
-                    .iter()
-                    .map(|a| self.lower_expression(a))
-                    .collect::<Vec<_>>();
-
-                for (argument_expr, instantiated_argument_ty) in args.iter().zip(instantiated_argument_types.iter()) {
-                    let ta = &self.expr_types[&argument_expr.id];
-                    self.constraints.push((ta.clone(), instantiated_argument_ty.kind.clone()));
+                dbg!(&callee, &callee_ty);
+                let mut type_params = vec![];
+                match &callee.kind {
+                    ExprKind::Local(type_args, def_id) => {
+                        for type_arg in type_args {
+                            match type_arg.kind {
+                                TyKind::Local(def_id) => {
+                                    type_params.push(type_args[0].clone());
+                                }
+                                _ => type_params.push(Ty {
+                                    kind: TyKind::Unspecified(self.next_ty_id()),
+                                    span: Span::from(0..0),
+                                }),
+                            }
+                        }
+                    }
+                    _ => todo!(),
                 }
 
-                let func_ty = TyKind::Function(
-                    instantiated_argument_types,
-                    Box::new(Ty {
+                let mut argument_types = vec![];
+                for arg in arguments {
+                    let a = self.lower_expression(arg);
+                    match &self.expr_types[&a.id] {
+                        t @ TyKind::Local(def_id) => {
+                            self.constraints.push((type_params[0].clone().kind, t.clone()));
+                            argument_types.push(type_params[0].kind.clone());
+                        }
+                        x => {
+                            argument_types.push(x.clone());
+                        }
+                    }
+                }
+                let argument_types = argument_types
+                    .into_iter()
+                    .map(|a| Ty {
+                        kind: a,
                         span: Span::from(0..0),
-                        kind: this_expression_ty.clone(),
-                    }),
-                );
+                    })
+                    .collect();
 
-                let target_ty = patch(self, self.expr_types[&callee.id].clone());
-                self.constraints.push((target_ty.clone(), func_ty));
+                let return_ty = Ty{ kind: TyKind::Unspecified(self.next_ty_id()), span: Span::from(0..0)};
 
-                ExprKind::Call(callee, self.arena.alloc_slice_fill_iter(args))
+                let patched_callee_ty = match callee_ty {
+                    TyKind::Local(def_id) => Ty {
+                        kind: type_params[0].kind.clone(),
+                        span: Span::from(0..0),
+                    },
+                    x => Ty {
+                        kind: x.clone(),
+                        span: Span::from(0..0),
+                    },
+                };
+
+                let func = TyKind::Function(argument_types, Box::new(return_ty.clone()));
+                dbg!(&type_params);
+                self.constraints
+                    .push((patched_callee_ty.kind.clone(), func.clone()));
+                self.constraints
+                    .push((this_expression_ty.clone(), return_ty.kind.clone()));
+                // todo!();
+
+                // let argument_types = arguments
+                //     .iter()
+                //     .map(|a| {
+                //         let id = &self.lower_expression(a).id;
+                //         patch(self, self.expr_types[id].clone())
+                //     })
+                //     .collect::<Vec<_>>();
+
+                // let instantiated_argument_types = argument_types
+                //     .into_iter()
+                //     .map(|t| Ty {
+                //         kind: patch(self, t),
+                //         span: Span::from(0..0),
+                //     })
+                //     .collect::<Vec<_>>();
+
+                // let args = arguments
+                //     .iter()
+                //     .map(|a| self.lower_expression(a))
+                //     .collect::<Vec<_>>();
+
+                // for (argument_expr, instantiated_argument_ty) in
+                //     args.iter().zip(instantiated_argument_types.iter())
+                // {
+                //     let ta = &self.expr_types[&argument_expr.id];
+                //     self.constraints
+                //         .push((ta.clone(), instantiated_argument_ty.kind.clone()));
+                // }
+
+                // let func_ty = TyKind::Function(
+                //     instantiated_argument_types,
+                //     Box::new(Ty {
+                //         span: Span::from(0..0),
+                //         kind: this_expression_ty.clone(),
+                //     }),
+                // );
+
+                // let target_ty = patch(self, self.expr_types[&callee.id].clone());
+                // self.constraints.push((target_ty.clone(), func_ty));
+
+                // ExprKind::Call(callee, self.arena.alloc_slice_fill_iter(args))
+
+                // todo!()
+                ExprKind::Z
             }
             ast::Expression::X => todo!(),
         };

@@ -71,11 +71,12 @@ pub enum ExprKind<'hir> {
         ast::BinaryOperation,
         &'hir Expression<'hir>,
     ),
-    Local(DefId),
+    Local(Vec<Ty>, DefId),
     Some(&'hir Expression<'hir>),
     Literal(ast::Literal),
     Closure(TyKind, &'hir Expression<'hir>),
     Call(&'hir Expression<'hir>, &'hir [&'hir Expression<'hir>]),
+    Z
 }
 
 impl Display for Ty {
