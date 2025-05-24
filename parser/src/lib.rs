@@ -9,7 +9,7 @@ use chumsky::prelude::*;
 
 use lexer::Token;
 use parser::{
-    BinaryOperation, Expression, Item, Parameter, Path, PathSegment, TranslationUnit, Ty,
+    BinaryOperation, Expression, Item, Parameter, Path, PathSegment, TranslationUnit, TyExpression,
     TypeDefinitionKind, TypeParameter,
 };
 

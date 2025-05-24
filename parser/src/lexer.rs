@@ -49,6 +49,8 @@ pub enum Punctuation {
     Semicolon,
     Plus,
     Star,
+
+    Question,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LiteralTok<'a> {
@@ -114,6 +116,7 @@ pub fn lexer<'src>()
         just(';').map(|_| Punctuation::Semicolon),
         just('+').map(|_| Punctuation::Plus),
         just('*').map(|_| Punctuation::Star),
+        just('?').map(|_| Punctuation::Question),
     ))
     .map(|p| Token::Punctuation(p));
 

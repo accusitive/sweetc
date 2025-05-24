@@ -88,11 +88,6 @@ dependencies = [
 [[package]]
 name = "hir"
 version = "0.1.0"
-dependencies = [
- "ariadne",
- "bumpalo",
- "parser",
-]
 
 [[package]]
 name = "hm_test"
@@ -101,14 +96,9 @@ dependencies = [
  "ariadne",
  "bumpalo",
  "hir",
- "infer",
  "parser",
  "yansi",
 ]
-
-[[package]]
-name = "infer"
-version = "0.1.0"
 
 [[package]]
 name = "libc"

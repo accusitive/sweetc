@@ -1,29 +1,17 @@
-class Enclose<W<?>> {
-    fn enclose<v: V>(val: V) -> W<V>;
+type Option<T> {
+    Some(T) | None
 }
-struct Wrapper<T> {
-    value: T
-}
-impl Enclose<Wrapper> {
-    fn enclose<v: V>(val: V) -> Wrapper<V> {
-        new Wrapper {
-            value: val
-        }
-    }
-}
-// Implement for any W that:
-// - takes 1 type parameter
-// - implements Enclose
-fn enclose<W<?>: +Enclose, V>(value: V) -> W<V> {
-    Enclose<W>::enclose(v)
-}
-fn add<T>(l: T, r: T) -> T {
-    l + r
-}
-fn main(n: i32, m: i64) -> Wrapper<i64> {
-    let output_i32 = add(n, n);
-    let output_i64 = add(m, m);
-    let sum = (output_i32 as i64) + (output_i64);
 
-    Enclose<Wrapper>::enclose(sum)
+fn make_some<T>(val: T) -> Option<T> {
+    Option::Some(val)
+}
+
+fn get_hkt<C<?>, T>(container: C, get: fn(C, u64) -> T, index: u64, rewrap: fn(T) -> C<T>) -> C<T> {
+    
+    let value = get(container, index) // automatically inferred to be T
+    let wrapped = rewrap(value) // inferred to be C<T>
+
+    
+
+    wrapped
 }

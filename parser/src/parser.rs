@@ -23,12 +23,20 @@ pub struct TranslationUnit<'a> {
 #[derive(Debug, Clone)]
 pub struct StructField<'a> {
     pub name: SpannedIdentifier<'a>,
-    pub ty: Spanned<Ty<'a>>,
+    pub ty: Spanned<TyExpression<'a>>,
+}
+#[derive(Debug, Clone)]
+pub struct EnumVariant<'a> {
+    pub name: SpannedIdentifier<'a>,
+    pub fields: Vec<Spanned<TyExpression<'a>>>,
 }
 #[derive(Debug, Clone)]
 pub enum TypeDefinitionKind<'a> {
     Struct {
         fields: Spanned<Vec<Spanned<StructField<'a>>>>,
+    },
+    Enum {
+        variants: Vec<Spanned<EnumVariant<'a>>>,
     },
 }
 #[derive(Debug, Clone)]
@@ -37,7 +45,7 @@ pub enum Item<'a> {
         name: SpannedIdentifier<'a>,
         type_parameters: Vec<Spanned<TypeParameter<'a>>>,
         parameters: Spanned<Vec<Spanned<Parameter<'a>>>>,
-        returns: Spanned<Ty<'a>>,
+        returns: Spanned<TyExpression<'a>>,
         body: Spanned<Expression<'a>>,
     },
     TypeDefinition {
@@ -49,11 +57,12 @@ pub enum Item<'a> {
 #[derive(Debug, Clone)]
 pub struct Parameter<'a> {
     pub name: SpannedIdentifier<'a>,
-    pub ty: Spanned<Ty<'a>>,
+    pub ty: Spanned<TyExpression<'a>>,
 }
 #[derive(Debug, Clone)]
 pub struct TypeParameter<'a> {
     pub name: SpannedIdentifier<'a>, // bounds
+    pub parameters: usize,
 }
 #[derive(Debug, Clone)]
 pub struct Path<'a> {
@@ -62,10 +71,10 @@ pub struct Path<'a> {
 #[derive(Debug, Clone)]
 pub struct PathSegment<'a> {
     pub name: SpannedIdentifier<'a>,
-    pub ty_arguments: Vec<Spanned<Ty<'a>>>,
+    pub ty_arguments: Vec<Spanned<TyExpression<'a>>>,
 }
 #[derive(Debug, Clone)]
-pub enum Ty<'a> {
+pub enum TyExpression<'a> {
     Infer,
     I32,
     I64,
@@ -85,7 +94,7 @@ pub enum Expression<'a> {
     Block(Vec<Spanned<Self>>),
     Let(
         SpannedIdentifier<'a>,
-        Option<Spanned<Ty<'a>>>,
+        Option<Spanned<TyExpression<'a>>>,
         Box<Spanned<Self>>,
     ),
     If {
@@ -98,10 +107,11 @@ pub enum Expression<'a> {
     Literal(Literal),
     Closure(
         Spanned<Vec<Spanned<Parameter<'a>>>>,
-        Spanned<Ty<'a>>,
+        Spanned<TyExpression<'a>>,
         Box<Spanned<Self>>,
     ),
     Call(Box<Spanned<Self>>, Vec<Spanned<Self>>),
+    Ascripted(Box<Spanned<Self>>, Spanned<TyExpression<'a>>),
     X,
 }
 #[derive(Debug, Clone)]
@@ -117,13 +127,13 @@ pub fn identifier<'src, I: BorrowInput<'src, Token = Token<'src>, Span = Span>>(
 -> parser!(SpannedIdentifier<'src>) {
     select_ref!( Token::Identifier(x) => x).map_with(|s, e| (*s, e.span()))
 }
-pub fn ty<'src, I: BorrowInput<'src, Token = Token<'src>, Span = Span>>()
--> parser!(Spanned<Ty<'src>>) {
+pub fn ty_expression<'src, I: BorrowInput<'src, Token = Token<'src>, Span = Span>>()
+-> parser!(Spanned<TyExpression<'src>>) {
     recursive(|ty| {
-        let infer = just(Token::Identifier("_")).map(|_| Ty::Infer);
-        let int32 = just(Token::Keyword(Keyword::I32)).map(|_| Ty::I32);
-        let int64 = just(Token::Keyword(Keyword::I64)).map(|_| Ty::I64);
-        let bool = just(Token::Keyword(Keyword::Bool)).map(|_| Ty::Bool);
+        let infer = just(Token::Identifier("_")).map(|_| TyExpression::Infer);
+        let int32 = just(Token::Keyword(Keyword::I32)).map(|_| TyExpression::I32);
+        let int64 = just(Token::Keyword(Keyword::I64)).map(|_| TyExpression::I64);
+        let bool = just(Token::Keyword(Keyword::Bool)).map(|_| TyExpression::Bool);
 
         // inline so I dont have to deal with recursion, duplicatedin expr
         let segment = identifier()
@@ -146,7 +156,7 @@ pub fn ty<'src, I: BorrowInput<'src, Token = Token<'src>, Span = Span>>()
             .collect::<Vec<_>>()
             .map(|segs| Path { segments: segs });
 
-        let name = path.map(|p| Ty::Name(p));
+        let name = path.map(|p| TyExpression::Name(p));
 
         let params = ty
             .clone()
@@ -162,7 +172,7 @@ pub fn ty<'src, I: BorrowInput<'src, Token = Token<'src>, Span = Span>>()
             .ignore_then(params)
             .then_ignore(just(Token::Punctuation(Punctuation::Arrow)))
             .then(ty.clone())
-            .map(|(params, ty)| Ty::Fn(params, Box::new(ty)));
+            .map(|(params, ty)| TyExpression::Fn(params, Box::new(ty)));
 
         let main_ty =
             choice((int32, int64, bool, infer, func, name)).map_with(|t, e| (t, e.span()));
@@ -174,7 +184,37 @@ pub fn ty<'src, I: BorrowInput<'src, Token = Token<'src>, Span = Span>>()
 }
 pub fn type_parameters<'src, I: BorrowInput<'src, Token = Token<'src>, Span = Span>>()
 -> parser!(Vec<Spanned<TypeParameter<'src>>>) {
-    let parameter = identifier().map_with(|i, e| (TypeParameter { name: i }, e.span()));
+    let higher_kinded_parameter = identifier()
+        .then(
+            just(Token::Punctuation(Punctuation::Question))
+                .ignored()
+                .separated_by(just(Token::Punctuation(Punctuation::Comma)))
+                .collect::<Vec<_>>()
+                .delimited_by(
+                    just(Token::Punctuation(Punctuation::LeftAngle)),
+                    just(Token::Punctuation(Punctuation::RightAngle)),
+                )
+                .map(|v| v.len()),
+        )
+        .map_with(|(i, p), e| {
+            (
+                TypeParameter {
+                    name: i,
+                    parameters: p,
+                },
+                e.span(),
+            )
+        });
+    let simple_parameter = identifier().map_with(|i, e| {
+        (
+            TypeParameter {
+                name: i,
+                parameters: 0,
+            },
+            e.span(),
+        )
+    });
+    let parameter = higher_kinded_parameter.or(simple_parameter);
 
     parameter
         .separated_by(just(Token::Punctuation(Punctuation::Comma)))
@@ -188,7 +228,7 @@ pub fn parameters<'src, I: BorrowInput<'src, Token = Token<'src>, Span = Span>>(
 -> parser!(Spanned<Vec<Spanned<Parameter<'src>>>>) {
     let parameter = identifier()
         .then_ignore(just(Token::Punctuation(Punctuation::Colon)))
-        .then(ty())
+        .then(ty_expression())
         .map_with(|(name, ty), e| (Parameter { name, ty }, e.span()));
 
     parameter
@@ -222,7 +262,8 @@ pub fn expr<'src, I: BorrowInput<'src, Token = Token<'src>, Span = Span>>()
         // inline so I dont have to deal with recursion, duplicatedin expr
         let segment = identifier()
             .then(
-                ty().separated_by(just(Token::Punctuation(Punctuation::Comma)))
+                ty_expression()
+                    .separated_by(just(Token::Punctuation(Punctuation::Comma)))
                     .collect::<Vec<_>>()
                     .delimited_by(
                         just(Token::Punctuation(Punctuation::LeftAngle)),
@@ -243,7 +284,7 @@ pub fn expr<'src, I: BorrowInput<'src, Token = Token<'src>, Span = Span>>()
         let annotated_let_expr = just(Token::Keyword(Keyword::Let))
             .ignore_then(identifier())
             .then_ignore(just(Token::Punctuation(Punctuation::Colon)))
-            .then(ty())
+            .then(ty_expression())
             .then_ignore(just(Token::Punctuation(Punctuation::Equal)))
             .then(expr.clone())
             .map_with(|((identifier, ty), expr), e| {
@@ -291,7 +332,7 @@ pub fn expr<'src, I: BorrowInput<'src, Token = Token<'src>, Span = Span>>()
             just(Token::Keyword(Keyword::Fn))
                 .ignore_then(closure_parameters)
                 .then_ignore(just(Token::Punctuation(Punctuation::Arrow)))
-                .then(ty())
+                .then(ty_expression())
                 .then(expr.clone())
         }
         .map_with(|((params, ty), body), e| {
@@ -301,8 +342,10 @@ pub fn expr<'src, I: BorrowInput<'src, Token = Token<'src>, Span = Span>>()
         let some = just(Token::Keyword(Keyword::Some))
             .ignore_then(expr.clone())
             .map_with(|expr, e| (Expression::Some(Box::new(expr)), e.span()));
+        let paren = expr.clone().delimited_by(just(Token::Punctuation(Punctuation::LeftParen)), just(Token::Punctuation(Punctuation::RightParen)));
 
         let atom = choice((
+            paren,
             block,
             annotated_let_expr,
             let_expr,
@@ -338,7 +381,7 @@ pub fn expr<'src, I: BorrowInput<'src, Token = Token<'src>, Span = Span>>()
                 },
             );
             let call = postfix(
-                0,
+                1,
                 expr.clone()
                     .separated_by(just(Token::Punctuation(Punctuation::Comma)))
                     .collect::<Vec<_>>()
@@ -349,15 +392,46 @@ pub fn expr<'src, I: BorrowInput<'src, Token = Token<'src>, Span = Span>>()
                 |target, args, e| (Expression::Call(Box::new(target), args), e.span()),
             );
 
-            atom.pratt((addition, multiplication, call))
+            let ascription = postfix(
+                5,
+                just(Token::Punctuation(Punctuation::Colon)).ignore_then(ty_expression()),
+                |target, ty, e| (Expression::Ascripted(Box::new(target), ty), e.span()),
+                
+            );
+
+            atom.pratt((addition, multiplication, call, ascription))
         }
     })
 }
 pub fn item<'src, I: BorrowInput<'src, Token = Token<'src>, Span = Span>>()
 -> parser!(Spanned<Item<'src>>) {
-    let ty_definition_body_struct = identifier::<I>()
+    let enum_variant = identifier()
+        .then(
+            ty_expression()
+                .separated_by(just(Token::Punctuation(Punctuation::Comma)))
+                .collect::<Vec<_>>()
+                .delimited_by(
+                    just(Token::Punctuation(Punctuation::LeftParen)),
+                    just(Token::Punctuation(Punctuation::RightParen)),
+                )
+                .or_not()
+                .map(|x| x.unwrap_or_default()),
+        )
+        .map_with(|(name, fields), e| (EnumVariant { name, fields }, e.span()));
+    let ty_definition_body_enum = enum_variant
+        .separated_by(just(Token::Punctuation(Punctuation::Bar)))
+        .allow_trailing()
+        .allow_leading()
+        .collect::<Vec<_>>()
+        .delimited_by(
+            just(Token::Punctuation(Punctuation::LeftBracket)),
+            just(Token::Punctuation(Punctuation::RightBracket)),
+        )
+        .map_with(|variants, e| (TypeDefinitionKind::Enum { variants }, e.span()));
+
+    let ty_definition_body_struct = identifier()
         .then_ignore(just(Token::Punctuation(Punctuation::Colon)))
-        .then(ty())
+        .then(ty_expression())
         .map_with(|(identifier, ty), e| {
             (
                 StructField {
@@ -368,6 +442,7 @@ pub fn item<'src, I: BorrowInput<'src, Token = Token<'src>, Span = Span>>()
             )
         })
         .separated_by(just(Token::Punctuation(Punctuation::Comma)))
+        .allow_trailing()
         .collect::<Vec<_>>()
         .map_with(|fields, e| (fields, e.span()))
         .delimited_by(
@@ -376,7 +451,7 @@ pub fn item<'src, I: BorrowInput<'src, Token = Token<'src>, Span = Span>>()
         )
         .map_with(|fields, e| (TypeDefinitionKind::Struct { fields: fields }, e.span()));
 
-    let ty_definition_body = ty_definition_body_struct;
+    let ty_definition_body = ty_definition_body_enum.or(ty_definition_body_struct);
     let ty_definition = just(Token::Keyword(Keyword::Type))
         .ignore_then(identifier())
         .then(type_parameters().or_not().map(|x| x.unwrap_or_default()))
@@ -397,7 +472,7 @@ pub fn item<'src, I: BorrowInput<'src, Token = Token<'src>, Span = Span>>()
         .then(type_parameters().or_not().map(|x| x.unwrap_or_default()))
         .then(parameters())
         .then_ignore(just(Token::Punctuation(Punctuation::Arrow)))
-        .then(ty())
+        .then(ty_expression())
         .then(expr())
         .map_with(|((((ident, type_parameters), parameters), ty), body), e| {
             (
