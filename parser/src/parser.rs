@@ -96,6 +96,7 @@ pub enum Expression<'a> {
         SpannedIdentifier<'a>,
         Option<Spanned<TyExpression<'a>>>,
         Box<Spanned<Self>>,
+        Option<Box<Spanned<Self>>>,
     ),
     If {
         condition: Box<Spanned<Self>>,
@@ -112,6 +113,7 @@ pub enum Expression<'a> {
     ),
     Call(Box<Spanned<Self>>, Vec<Spanned<Self>>),
     Ascripted(Box<Spanned<Self>>, Spanned<TyExpression<'a>>),
+    New(Path<'a>),
     X,
 }
 #[derive(Debug, Clone)]
@@ -279,26 +281,36 @@ pub fn expr<'src, I: BorrowInput<'src, Token = Token<'src>, Span = Span>>()
             .at_least(1)
             .collect::<Vec<_>>()
             .map(|segs| Path { segments: segs });
+        let new = just(Token::Keyword(Keyword::New))
+            .ignore_then(path.clone())
+            .map_with(|p, e| (Expression::New(p), e.span()));
+
         let path = path.map_with(|p, e| (Expression::Path(p), e.span()));
 
-        let annotated_let_expr = just(Token::Keyword(Keyword::Let))
-            .ignore_then(identifier())
-            .then_ignore(just(Token::Punctuation(Punctuation::Colon)))
-            .then(ty_expression())
-            .then_ignore(just(Token::Punctuation(Punctuation::Equal)))
-            .then(expr.clone())
-            .map_with(|((identifier, ty), expr), e| {
-                (
-                    Expression::Let(identifier, Some(ty), Box::new(expr)),
-                    e.span(),
-                )
-            });
+        // let annotated_let_expr = just(Token::Keyword(Keyword::Let))
+        //     .ignore_then(identifier())
+        //     .then_ignore(just(Token::Punctuation(Punctuation::Colon)))
+        //     .then(ty_expression())
+        //     .then_ignore(just(Token::Punctuation(Punctuation::Equal)))
+        //     .then(expr.clone())
+        //     .map_with(|((identifier, ty), expr), e| {
+        //         (
+        //             Expression::Let(identifier, Some(ty), Box::new(expr)),
+        //             e.span(),
+        //         )
+        //     });
         let let_expr = just(Token::Keyword(Keyword::Let))
             .ignore_then(identifier())
             .then_ignore(just(Token::Punctuation(Punctuation::Equal)))
             .then(expr.clone())
-            .map_with(|(identifier, expr), e| {
-                (Expression::Let(identifier, None, Box::new(expr)), e.span())
+            .then(
+                expr.clone().or_not(),
+            )
+            .map_with(|((identifier, expr), next), e| {
+                (
+                    Expression::Let(identifier, None, Box::new(expr), next.map(|v| Box::new(v))),
+                    e.span(),
+                )
             });
 
         let if_expr = just(Token::Keyword(Keyword::If))
@@ -342,18 +354,13 @@ pub fn expr<'src, I: BorrowInput<'src, Token = Token<'src>, Span = Span>>()
         let some = just(Token::Keyword(Keyword::Some))
             .ignore_then(expr.clone())
             .map_with(|expr, e| (Expression::Some(Box::new(expr)), e.span()));
-        let paren = expr.clone().delimited_by(just(Token::Punctuation(Punctuation::LeftParen)), just(Token::Punctuation(Punctuation::RightParen)));
+        let paren = expr.clone().delimited_by(
+            just(Token::Punctuation(Punctuation::LeftParen)),
+            just(Token::Punctuation(Punctuation::RightParen)),
+        );
 
         let atom = choice((
-            paren,
-            block,
-            annotated_let_expr,
-            let_expr,
-            path,
-            if_expr,
-            some,
-            literal,
-            closure,
+            paren, block, let_expr, new, path, if_expr, some, literal, closure,
         ));
         {
             let addition = infix(
@@ -396,7 +403,6 @@ pub fn expr<'src, I: BorrowInput<'src, Token = Token<'src>, Span = Span>>()
                 5,
                 just(Token::Punctuation(Punctuation::Colon)).ignore_then(ty_expression()),
                 |target, ty, e| (Expression::Ascripted(Box::new(target), ty), e.span()),
-                
             );
 
             atom.pratt((addition, multiplication, call, ascription))

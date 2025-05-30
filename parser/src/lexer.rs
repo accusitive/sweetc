@@ -11,7 +11,8 @@ pub enum Keyword {
     Fn,
     Impl,
     For,
-
+    New,
+    
     View,
     As,
 
@@ -74,6 +75,8 @@ pub fn lexer<'src>()
         "type" => Token::Keyword(Keyword::Type),
         "impl" => Token::Keyword(Keyword::Impl),
         "for" => Token::Keyword(Keyword::For),
+        "new" => Token::Keyword(Keyword::New),
+
         "fn" => Token::Keyword(Keyword::Fn),
 
         "i32" => Token::Keyword(Keyword::I32),
