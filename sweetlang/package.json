@@ -1,0 +1,25 @@
+{
+  "name": "sweetlang",
+  "displayName": "sweetlang",
+  "description": "sweet syntax highlighting",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [{
+      "id": "sweet",
+      "aliases": ["Sweet", "sweet"],
+      "extensions": [".sweet",".sw"],
+      "configuration": "./language-configuration.json"
+    }],
+    "grammars": [{
+      "language": "sweet",
+      "scopeName": "source.sweet",
+      "path": "./syntaxes/sweet.tmLanguage.json"
+    }]
+  }
+}

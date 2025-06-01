@@ -1,0 +1,69 @@
+{
+	"$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+	"name": "Sweet",
+	"patterns": [
+		{
+			"include": "#keywords"
+		},
+		{
+			"include": "#strings"
+		},
+		{
+			"include": "#identifiers"
+		},
+		{
+			"include": "#comments"
+		}
+	],
+	"repository": {
+		"identifiers": {
+			"patterns": [
+				{
+					"name": "meta.declaration.sweet",
+					"match": "\\blet\\s+([A-Za-z_][A-Za-z0-9_]*)",
+					"captures": {
+						"1": {
+							"name": "variable.name.sweet"
+						}
+					}
+				},
+				{
+					"name": "entity.name.function",
+					"match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b"
+				}
+			]
+		},
+		"keywords": {
+			"patterns": [
+				{
+					"name": "keyword.operator.sweet",
+					"match": "\\b(=|:|,|->|::|\\?)\\b"
+				},
+				{
+					"name": "keyword.control.sweet",
+					"match": "\\b(type|fn|let|void|new|match|as|i32|i64)\\b"
+				}
+			]
+		},
+		"strings": {
+			"name": "string.quoted.double.sweet",
+			"begin": "\"",
+			"end": "\"",
+			"patterns": [
+				{
+					"name": "constant.character.escape.sweet",
+					"match": "\\\\."
+				}
+			]
+		},
+		"comments": {
+			"patterns": [
+				{
+					"name": "comment",
+					"match": "//(.*)$"
+				}
+			]
+		}
+	},
+	"scopeName": "source.sweet"
+}
