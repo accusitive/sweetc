@@ -113,7 +113,7 @@ pub enum Expression<'a> {
     ),
     Call(Box<Spanned<Self>>, Vec<Spanned<Self>>),
     Ascripted(Box<Spanned<Self>>, Spanned<TyExpression<'a>>),
-    New(Path<'a>),
+    New(Path<'a>, Vec<Spanned<Self>>),
     X,
 }
 #[derive(Debug, Clone)]
@@ -281,9 +281,20 @@ pub fn expr<'src, I: BorrowInput<'src, Token = Token<'src>, Span = Span>>()
             .at_least(1)
             .collect::<Vec<_>>()
             .map(|segs| Path { segments: segs });
+
+        let argument_list = expr
+            .clone()
+            .separated_by(just(Token::Punctuation(Punctuation::Comma)))
+            .collect::<Vec<_>>()
+            .delimited_by(
+                just(Token::Punctuation(Punctuation::LeftParen)),
+                just(Token::Punctuation(Punctuation::RightParen)),
+            );
+
         let new = just(Token::Keyword(Keyword::New))
             .ignore_then(path.clone())
-            .map_with(|p, e| (Expression::New(p), e.span()));
+            .then(argument_list.clone().or_not().map(|x| x.unwrap_or_default()))
+            .map_with(|(p, a), e| (Expression::New(p, a), e.span()));
 
         let path = path.map_with(|p, e| (Expression::Path(p), e.span()));
 
@@ -303,9 +314,7 @@ pub fn expr<'src, I: BorrowInput<'src, Token = Token<'src>, Span = Span>>()
             .ignore_then(identifier())
             .then_ignore(just(Token::Punctuation(Punctuation::Equal)))
             .then(expr.clone())
-            .then(
-                expr.clone().or_not(),
-            )
+            .then(expr.clone().or_not())
             .map_with(|((identifier, expr), next), e| {
                 (
                     Expression::Let(identifier, None, Box::new(expr), next.map(|v| Box::new(v))),
@@ -387,17 +396,10 @@ pub fn expr<'src, I: BorrowInput<'src, Token = Token<'src>, Span = Span>>()
                     )
                 },
             );
-            let call = postfix(
-                1,
-                expr.clone()
-                    .separated_by(just(Token::Punctuation(Punctuation::Comma)))
-                    .collect::<Vec<_>>()
-                    .delimited_by(
-                        just(Token::Punctuation(Punctuation::LeftParen)),
-                        just(Token::Punctuation(Punctuation::RightParen)),
-                    ),
-                |target, args, e| (Expression::Call(Box::new(target), args), e.span()),
-            );
+
+            let call = postfix(1, argument_list, |target, args, e| {
+                (Expression::Call(Box::new(target), args), e.span())
+            });
 
             let ascription = postfix(
                 5,
