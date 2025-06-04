@@ -13,6 +13,5 @@ pub fn main() {
 
     let arena = bumpalo::Bump::new();
 
-    // let mut lctx = HirLower::new(&arena);
-}
 
+}

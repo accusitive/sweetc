@@ -22,7 +22,7 @@ impl Monad<Option> {
     }
     fn bind<A, B>: (this: Option<A>, func: fn(A) -> Option<B>) -> Option<B> {
         match this {
-            | Some => func(inner)
+            | Some(inner) => func(inner)
             | None => None
         }
     }
@@ -30,7 +30,7 @@ impl Monad<Option> {
 impl Functor<Option> {
     fn map<A, B>: (this: Option<A>, func: fn(A) -> B) -> Option<B> {
         match this {
-            | Some => Monad<Option<B>>::unit(func(inner))
+            | Some(inner) => Monad<Option<B>>::unit(func(inner))
             | None => Option<B>::None
         }
     }
@@ -48,7 +48,7 @@ class Iterator<I, T> {
 impl<T> Iterator<SinglyLinkedList<T>, T> {
     fn next: (this: SinglyLinkedList<T>) -> Option<(T, SinglyLinkedList<T>)> {
         match this {
-            | Value => Some((item, remainder))
+            | Value(item, remainder) => Some((item, remainder))
             | Empty => None
         }
     }
@@ -59,7 +59,7 @@ impl<T> Iterator<Option<T>, T> {
 
     fn next: (this: Self) -> Option<(T, Self)> {
         match this {
-            | Some => Some((item, None))
+            | Some(inner) => Some((item, None))
             | None => None
         }
     }
@@ -67,7 +67,7 @@ impl<T> Iterator<Option<T>, T> {
 
 fn unwrap<T>: (value: Option<T>) -> T {
     match value {
-        | Some => inner
+        | Some(inner) => inner
         | None => __rt__panic() 
     }
 }
@@ -107,25 +107,25 @@ fn use_list: () -> void {
         list
         |> Iterator<_>::next
         |> Option<_>::unwrap
-    // assert(element == 0);
+    assert(element == 0);
     let (list, element) = list |> Iterator::next |> Option::unwrap
-    // assert(element == 1);
-    let (list, element) = list |> Iterator::next |> Option::unwrap
-    // assert(element == 2);
+    assert(element == 1);
+    let (list, element) = list.next().unwrap()
+    assert(element == 2);
 }
-fn int_tuple_to_float_pos: (test: (i32, i32)) -> Position<i32> {
+fn int_tuple_to_float_pos: (test: (i32, i32)) -> Position<f32> {
     // note: this is a showcase on how you can use pipelines on functions that take more than 1 argument by using a closure, see above for simpler case
     let p = test 
-            |> fn(t: _) -> _ into_pos(t, t) 
-            |> fn(p: _) -> _ (into_float(p), into_float(p)) 
-            |> fn(p: _) -> _ into_pos(p, p) 
+            |> |t| into_pos(t.0, t.1) 
+            |> |p| (into_float(p.x), into_float(p.y)) 
+            |> |p| into_pos(p.0, .1) 
     p
 }
 // Showcase using a monad
 fn main: () -> void {
-    let plus_one        = fn(x: i32) -> i32         { x + ONE }
+    let plus_one        = fn(x: i32) -> i32         { x + 1 }
     let plus_one_option = fn(x: i32) -> Option<i32> { Some(plus_one(x)) }
-    let value = Some(ONE)
+    let value = Some(1)
     {
         let result = Option::bind(value, plus_one_option)
         let result_2 = Option::map(result, plus_one)

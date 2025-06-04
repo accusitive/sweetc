@@ -16,7 +16,6 @@ class Functor<F<?>> {
 }
 // Provide implementation of Monad<M>::unit and Monad<M>::bind where M = Option
 impl Monad<Option> {
-    // also called return. no preference for what this should be called honestly
     fn unit<T>: (this: T) -> Option<T> {
         Option::Some(this)
     }
@@ -37,7 +36,7 @@ impl Functor<Option> {
 }
 type SinglyLinkedList<T> {
     | Value(T, SinglyLinkedList<T>)
-    | Empty
+    | None
 }
 // T = Item 
 // I = Iterator
@@ -49,7 +48,7 @@ impl<T> Iterator<SinglyLinkedList<T>, T> {
     fn next: (this: SinglyLinkedList<T>) -> Option<(T, SinglyLinkedList<T>)> {
         match this {
             | Value => Some((item, remainder))
-            | Empty => None
+            | None => None
         }
     }
 }
@@ -59,7 +58,7 @@ impl<T> Iterator<Option<T>, T> {
 
     fn next: (this: Self) -> Option<(T, Self)> {
         match this {
-            | Some => Some((item, None))
+            | Value => Some((item, None))
             | None => None
         }
     }
@@ -79,56 +78,53 @@ class Simple<T> {
 class OtherSimple<T> {
     fn no: (this: T) -> ()
 }
-class Third<T> {
 
-}
 impl<T> Simple<T> {
     fn nop: (this: T) -> T {
         this
     }
 }
-// implement Simple for any type T where an implementation of Third<T> exists
-impl<T> where(impl Third<T>) Simple<T> {
-    // ..
-}
 // use go takes 1 type parameter, `S`
 // S is valid for any type where an implemention Simple<S> exists AND no implementation for OtherSimple<S> exists
-fn constraint_example<S> where(impl Simple<S>, !impl OtherSimple<S>): (simple: S) -> Option<S> {
+fn use_go<S>: (simple: S) where(impl Simple<S>, !impl OtherSimple<S>) -> Option<S>{
     Option::Some(simple) |> Simple<S>::nop
 }
 
-type ConstraintedType<T> where(impl Simple<T>) {
-    value: T
-}
 fn use_list: () -> void {
-    let list = SinglyLinkedList::Value(ZERO, SinglyLinkedList::Value(ONE, SinglyLinkedList::Value(TWO, SinglyLinkedList::Empty)))
+    let list = SinglyLinkedList::Value(ZERO, SinglyLinkedList::Value(ONE, SinglyLinkedList::Value(TWO, SinglyLinkedList::None)))
     // use explicit types here, hopefully they could be inferred
     let (list, element) = 
         list
         |> Iterator<_>::next
         |> Option<_>::unwrap
-    // assert(element == 0);
+    assert(element == 0);
     let (list, element) = list |> Iterator::next |> Option::unwrap
-    // assert(element == 1);
-    let (list, element) = list |> Iterator::next |> Option::unwrap
-    // assert(element == 2);
+    assert(element == 1);
+    let (list, element) = list.next().unwrap()
+    assert(element == 2);
 }
-fn int_tuple_to_float_pos: (test: (i32, i32)) -> Position<i32> {
+fn int_tuple_to_float_pos: (test: (i32, i32)) -> Position<f32> {
     // note: this is a showcase on how you can use pipelines on functions that take more than 1 argument by using a closure, see above for simpler case
     let p = test 
-            |> fn(t: _) -> _ into_pos(t, t) 
-            |> fn(p: _) -> _ (into_float(p), into_float(p)) 
-            |> fn(p: _) -> _ into_pos(p, p) 
+            |> |t| into_pos(t.0, t.1) 
+            |> |p| (into_float(p.x), into_float(p.y)) 
+            |> |p| into_pos(p.0, .1) 
     p
 }
 // Showcase using a monad
 fn main: () -> void {
-    let plus_one        = fn(x: i32) -> i32         { x + ONE }
+    let plus_one        = fn(x: i32) -> i32         { x + 1 }
     let plus_one_option = fn(x: i32) -> Option<i32> { Some(plus_one(x)) }
-    let value = Some(ONE)
+    let value = Some(1)
     {
         let result = Option::bind(value, plus_one_option)
         let result_2 = Option::map(result, plus_one)
+        print(result_2)
+    }
+    // or, alternatively
+    {
+        let result = Option::bind(value, plus_one_option)
+        let result_2 = result.map(plus_one)
         print(result_2)
     }
 }

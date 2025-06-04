@@ -12,7 +12,7 @@ pub enum Keyword {
     Impl,
     For,
     New,
-    
+    Where,
     View,
     As,
 
@@ -38,18 +38,26 @@ pub enum Punctuation {
     RightParen,
     LeftBracket,
     RightBracket,
+    // '
     Tick,
     Bar,
     Comma,
     Colon,
     ColonColon,
 
+    /// =>
+    FatArrow,
+    /// ->
     Arrow,
+    /// |>
+    Pipe,
     Dot,
     Equal,
     Semicolon,
     Plus,
     Star,
+    // !
+    Bang,
 
     Question,
 }
@@ -71,6 +79,7 @@ pub fn lexer<'src>()
 -> impl Parser<'src, &'src str, Vec<Spanned<Token<'src>>>, chumsky::extra::Err<Rich<'src, char, Span>>>
 {
     let kw = ident().map(|ident| match ident {
+        "where" => Token::Keyword(Keyword::Where),
         "class" => Token::Keyword(Keyword::Class),
         "type" => Token::Keyword(Keyword::Type),
         "impl" => Token::Keyword(Keyword::Impl),
@@ -103,6 +112,9 @@ pub fn lexer<'src>()
     let punc = choice((
         // two-wide
         just("->").map(|_| Punctuation::Arrow),
+        just("=>").map(|_| Punctuation::FatArrow),
+        just("|>").map(|_| Punctuation::Pipe),
+
         just("::").map(|_| Punctuation::ColonColon),
         just('<').map(|_| Punctuation::LeftAngle),
         just('>').map(|_| Punctuation::RightAngle),
@@ -119,6 +131,7 @@ pub fn lexer<'src>()
         just(';').map(|_| Punctuation::Semicolon),
         just('+').map(|_| Punctuation::Plus),
         just('*').map(|_| Punctuation::Star),
+        just('!').map(|_| Punctuation::Bang),
         just('?').map(|_| Punctuation::Question),
     ))
     .map(|p| Token::Punctuation(p));
